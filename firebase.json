@@ -1,0 +1,10 @@
+{
+  "hosting": {
+    "site": "snagwalk-app",
+    "public": "hosting",
+    "ignore": ["firebase.json", "**/.*"],
+    "rewrites": [
+      { "source": "**", "run": { "serviceId": "snagwalk", "region": "asia-southeast1" } }
+    ]
+  }
+}

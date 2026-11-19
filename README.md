@@ -74,6 +74,16 @@ Service account `snagwalk-run` holds `roles/aiplatform.user`, `roles/alloydb.cli
 `roles/serviceusage.serviceUsageConsumer`, `roles/storage.objectAdmin` on the bucket and
 `roles/secretmanager.secretAccessor` on `snagwalk-db-password`. No VPC connector is required.
 
+### Public URL (Firebase Hosting)
+
+**https://snagwalk-app.web.app** fronts the Cloud Run service: `firebase.json` rewrites every path to
+`snagwalk` in `asia-southeast1`. The CDN caches the prerendered home page, so **re-release Hosting after
+every Cloud Run deploy** to purge it:
+
+```bash
+firebase deploy --only hosting
+```
+
 ## Guardrails
 
 See `.agents/skills/snagwalk-guardrails/SKILL.md`. In short: snake_case tables with uuid ids, parameterized

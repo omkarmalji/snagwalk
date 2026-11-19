@@ -42,3 +42,7 @@ next-env.d.ts
 
 # private session handoff notes
 *.local.md
+
+# firebase
+firebase-debug.log
+.firebase/

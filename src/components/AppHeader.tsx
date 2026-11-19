@@ -4,20 +4,12 @@ import Link from 'next/link';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ArrowLeft } from '@phosphor-icons/react';
 import { cn } from '@/components/ui';
+import BrandLogo from '@/components/BrandLogo';
 
 interface Health {
   ai: { live: boolean; model: string; lastError: string | null; lastOk: string | null };
   db: { mode: string };
   storage: { mode: string };
-}
-
-function BrandMark() {
-  return (
-    <span className="relative grid size-8 place-items-center rounded-[10px] bg-ink text-bg">
-      <span className="absolute inset-[7px] rounded-[3px] border-2 border-current" />
-      <span className="absolute size-1.5 rounded-full bg-accent" />
-    </span>
-  );
 }
 
 /** Shows whether Gemini and the database are live. Real semantic state, refreshed on each page load. */
@@ -83,7 +75,7 @@ export default function AppHeader({
           </Link>
         ) : (
           <Link href="/" className="flex items-center gap-2.5" aria-label="SnagWalk home">
-            <BrandMark />
+            <BrandLogo />
             <span className="text-[17px] font-semibold tracking-tight">SnagWalk</span>
           </Link>
         )}

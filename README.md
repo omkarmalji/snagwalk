@@ -34,12 +34,17 @@ Every AI result carries a `source` (`gemini` or `fallback`) and the UI labels fa
 ```bash
 pnpm install
 gcloud auth application-default login     # Gemini + Cloud Storage via ADC
-cp .env.example .env.local                # fill in DB_* if you can reach AlloyDB
+cp .env.example .env.local                # set DB_PASSWORD (and ALLOYDB_INSTANCE_URI)
 pnpm dev
 ```
 
-Outside the VPC AlloyDB is unreachable; in development the app then uses a local JSON store
-(`.snagwalk_local_data.json`) and local photo storage (`.local_uploads/`). Both fallbacks are off in production.
+AlloyDB is reached through the built-in connector (`src/lib/alloydb-connector.ts`): it fetches a short-lived
+client certificate from the AlloyDB Admin API with your ADC identity and opens mutual TLS to the instance on
+port 5433, so no VPC, PSC endpoint or Auth Proxy is needed. Your account needs `roles/alloydb.client`.
+The schema is created on first use (`CREATE TABLE IF NOT EXISTS`).
+
+If the database is unreachable, development falls back to a local JSON store (`.snagwalk_local_data.json`)
+and local photo storage (`.local_uploads/`). Both fallbacks are off in production.
 
 ## Checks
 
@@ -52,14 +57,22 @@ pnpm smoke http://localhost:3000 path/to/defect.jpg   # end-to-end API test agai
 
 ## Deploying to Cloud Run
 
+Runs in `asia-southeast1` next to the AlloyDB cluster; Gemini is called in `asia-south1`.
+
 ```bash
-gcloud run deploy snagwalk --source . --region asia-south1 \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=snagwalk-515212,GCS_BUCKET_NAME=snagwalk-photos-515212,VERTEX_AI_LOCATION=asia-south1,GEMINI_MODEL=gemini-3.5-flash,DB_HOST=...,DB_USER=...,DB_NAME=... \
+gcloud builds submit --region asia-southeast1 \
+  --tag asia-southeast1-docker.pkg.dev/snagwalk-515212/snagwalk/app:<tag>
+gcloud run deploy snagwalk --region asia-southeast1 \
+  --image asia-southeast1-docker.pkg.dev/snagwalk-515212/snagwalk/app:<tag> \
+  --service-account snagwalk-run@snagwalk-515212.iam.gserviceaccount.com \
+  --set-env-vars GOOGLE_CLOUD_PROJECT=snagwalk-515212,GCS_BUCKET_NAME=snagwalk-photos-515212,VERTEX_AI_LOCATION=asia-south1,GEMINI_MODEL=gemini-3.5-flash,GEMINI_THINKING=low,ALLOYDB_INSTANCE_URI=projects/snagwalk-515212/locations/asia-southeast1/clusters/snagwalk-db/instances/primary,DB_USER=postgres,DB_NAME=postgres \
   --set-secrets DB_PASSWORD=snagwalk-db-password:latest \
-  --network <vpc> --subnet <subnet>
+  --allow-unauthenticated --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3
 ```
 
-The service account needs `roles/aiplatform.user`, `roles/storage.objectAdmin` on the bucket, and VPC access to AlloyDB.
+Service account `snagwalk-run` holds `roles/aiplatform.user`, `roles/alloydb.client`,
+`roles/serviceusage.serviceUsageConsumer`, `roles/storage.objectAdmin` on the bucket and
+`roles/secretmanager.secretAccessor` on `snagwalk-db-password`. No VPC connector is required.
 
 ## Guardrails
 

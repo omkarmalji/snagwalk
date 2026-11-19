@@ -1,0 +1,15 @@
+# Files never uploaded to Cloud Build (gcloud run deploy --source)
+.gcloudignore
+.git
+.gitignore
+node_modules/
+.next/
+.env
+.env.*
+!.env.example
+*.local.md
+.snagwalk_local_data.json
+.local_uploads/
+public/uploads/
+.playwright-mcp/
+tsconfig.tsbuildinfo

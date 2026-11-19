@@ -2,8 +2,15 @@ node_modules
 .next
 .git
 .gitignore
-.env*.local
+.gcloudignore
 .env
+.env*.local
+*.local.md
+.snagwalk_local_data.json
+.local_uploads
+public/uploads
+.playwright-mcp
+tsconfig.tsbuildinfo
 README.md
 Dockerfile
 .dockerignore

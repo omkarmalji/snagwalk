@@ -70,15 +70,33 @@ label {
   outline-offset: 2px;
 }
 
-input[type='date']::-webkit-calendar-picker-indicator {
-  opacity: 0.6;
-  cursor: pointer;
+/*
+ * Native date input, normalised: iOS Safari otherwise centres the value and gives the control an intrinsic
+ * width that overflows its column. The picker indicator is stretched invisibly over the whole field so a
+ * click anywhere opens the picker on desktop; a Phosphor calendar icon sits on top for the visual.
+ */
+input[type='date'].date-field {
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+  line-height: normal;
+  text-align: left;
 }
-
-@media (prefers-color-scheme: dark) {
-  input[type='date']::-webkit-calendar-picker-indicator {
-    filter: invert(1);
-  }
+input[type='date'].date-field::-webkit-date-and-time-value {
+  margin: 0;
+  text-align: left;
+}
+input[type='date'].date-field::-webkit-calendar-picker-indicator {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 @layer components {

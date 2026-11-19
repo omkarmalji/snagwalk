@@ -38,3 +38,4 @@ next-env.d.ts
 .snagwalk_local_data.json
 /public/uploads/
 /.local_uploads/
+/.playwright-mcp/

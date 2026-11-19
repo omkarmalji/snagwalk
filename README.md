@@ -1,104 +1,68 @@
-# SnagWalk 📱🏗️
+# SnagWalk
 
-**SnagWalk** is a mobile-first flat possession inspection and builder snag letter assistant built with **Next.js (App Router)**, **Google Cloud Vertex AI (Gemini Flash)**, **AlloyDB (PostgreSQL)**, and **Google Cloud Storage (GCS)**.
+Possession-day snag inspection for Indian home buyers. Walk the new flat room by room, photograph defects,
+let Gemini classify them, and send the builder a formal snag letter with a photo annexure.
 
----
+Built on Next.js 15, Gemini 3.5 Flash on Vertex AI, AlloyDB and Cloud Storage. Deploys to Cloud Run.
 
-## 🚀 Key Features & 4-Screen Flow
+## The flow
 
-1. **Screen 1: New Possession Walk Form (`/`)**
-   - Inputs: Buyer Name, Builder / Developer, Project Name, Tower / Wing, Flat Number, BHK configuration, and Possession Date.
-   - Automatically initializes the walk and default possession inspection rooms:
-     - *Living Room*, *Kitchen*, *Bedroom 1 (Master)*, *Bedroom 2*, *Bathrooms*, *Balcony*.
-   - Large tap targets and mobile-optimized input layout.
+| Screen | Route | What Gemini does |
+| --- | --- | --- |
+| Start a walk | `/` | Nothing yet. Rooms are provisioned from the BHK (bedrooms, bathrooms, utility). |
+| Rooms | `/walks/[walkId]` | Writes a 4-6 item checklist for each room on first open. |
+| Snag capture | `/walks/[walkId]/rooms/[roomId]/snag` | Reads the photo and returns category, severity, description, location and a bounding box drawn on the photo. The buyer edits or discards. |
+| Builder letter | `/walks/[walkId]/letter` | Drafts the formal notice from the snags table only: grouped by room, photo references, 15-day deadline, written confirmation. PDF, share and copy. |
 
-2. **Screen 2: Room-by-Room Walk (`/walks/[walkId]`)**
-   - Summary of flat and total logged defects.
-   - Expanding any room triggers **Gemini on Vertex AI** (`project snagwalk-515212`) to generate a tailored 4-6 point possession inspection checklist.
-   - Interactive checklist items with progress tracking.
-   - Direct button to capture snags in each room.
+The letter stores a fingerprint of the snags it was written from. If a snag is added, edited or deleted the
+letter is marked stale and regenerated on the next visit, so it never cites a defect that no longer exists.
 
-3. **Screen 3: Snag Capture & AI Vision Analysis (`/walks/[walkId]/rooms/[roomId]/snag`)**
-   - One-tap mobile camera trigger (`capture="environment"`) or file upload.
-   - Uploads photo directly to **Google Cloud Storage** (`gs://snagwalk-photos-515212`).
-   - Analyzed by **Gemini Flash on Vertex AI** with strict schema guardrails:
-     - `category`: `wall_paint`, `tiles`, `plumbing`, `electrical`, `doors_windows`, `woodwork`, `ceiling`, `flooring`, `other`.
-     - `severity`: `minor`, `major`, `critical`.
-     - `description` & `location_note`.
-     - Non-defect detection safely classified as `other`.
-   - Stored in AlloyDB `snags` table with an instant **edit option** to review/adjust details before saving.
+## Google AI and Cloud
 
-4. **Screen 4: Formal Builder Snag Letter & PDF Export (`/walks/[walkId]/letter`)**
-   - Gemini writes an official pre-possession snagging letter grounded **strictly in the database defects** (never hallucinates extra snags).
-   - Tone: Formal, polite, and firm, addressed to the builder.
-   - Grouped by room, listing severity and referenced photo numbers (`Photo #1`, `Photo #2`...).
-   - Demands a **15-day rectification timeline** and written confirmation before handover.
-   - Photo evidence annexure showing every captured defect photo with corresponding photo tags.
-   - **Download PDF** button with client-side document rendering (`jspdf` & `html2canvas`).
+- **Gemini 3.5 Flash on Vertex AI** (`@google/genai`), structured JSON output with enum-constrained schemas,
+  low thinking level and medium image resolution so a photo is analysed in about 3-6 seconds from `asia-south1`.
+- **Cloud Storage** for photos (private bucket). The browser loads them through `/api/photos`, which also keeps
+  the PDF export canvas untainted.
+- **AlloyDB** for walks, rooms and snags. Parameterized SQL only.
+- **Cloud Run** via the multi-stage `Dockerfile` (standalone Next.js on port 8080).
 
----
+Every AI result carries a `source` (`gemini` or `fallback`) and the UI labels fallbacks honestly.
+`GET /api/health` reports which model, auth mode, database and storage are live; the header shows it.
 
-## 🛡️ Guardrails Compliance
-
-- **Database Rules**:
-  - `snake_case` column and table names across `walks`, `rooms`, `snags`.
-  - UUID primary key `id` (`gen_random_uuid()`).
-  - Parameterized SQL queries only (node-postgres `$1, $2, ...`).
-  - Prohibits `DROP TABLE` and `TRUNCATE`.
-  - Photos stored in `gs://snagwalk-photos-515212` with only URLs kept in DB.
-- **Gemini Guardrails**:
-  - Strict JSON output structure.
-  - Allowed categories and severities enforced by validation schemas.
-- **Letter Guardrails**:
-  - Formal tone addressed to builder.
-  - Grouped by room with severity and photo number.
-  - Mandated 15-day timeline and written confirmation.
-- **UI Guardrails**:
-  - Mobile-first container (`max-w-md`).
-  - One primary action per screen with ≥48px touch targets.
-
----
-
-## ⚙️ Environment Variables
-
-Read from environment variables, never hardcoded:
+## Running locally
 
 ```bash
-# AlloyDB Connection
-DB_HOST=your-alloydb-ip
-DB_PORT=5432
-DB_USER=postgres
-DB_PASSWORD=your-alloydb-password
-DB_NAME=postgres
-DB_SSL=false
-
-# Google Cloud Settings
-GOOGLE_CLOUD_PROJECT=snagwalk-515212
-VERTEX_AI_LOCATION=us-central1
-GCS_BUCKET_NAME=snagwalk-photos-515212
-GEMINI_API_KEY=
-```
-
----
-
-## 🛠️ Running Locally
-
-```bash
-# Install dependencies
 pnpm install
-
-# Build
-pnpm run build
-
-# Start dev server
-pnpm run dev
+gcloud auth application-default login     # Gemini + Cloud Storage via ADC
+cp .env.example .env.local                # fill in DB_* if you can reach AlloyDB
+pnpm dev
 ```
 
----
+Outside the VPC AlloyDB is unreachable; in development the app then uses a local JSON store
+(`.snagwalk_local_data.json`) and local photo storage (`.local_uploads/`). Both fallbacks are off in production.
 
-## 🐳 Dockerfile for Cloud Run
+## Checks
 
-A production multi-stage `Dockerfile` is included:
-- Built on `node:22-alpine`.
-- Standalone Next.js runner for optimal image size and quick cold starts.
-- Listens on port `8080` (Google Cloud Run standard).
+```bash
+pnpm typecheck
+pnpm lint
+pnpm build
+pnpm smoke http://localhost:3000 path/to/defect.jpg   # end-to-end API test against a running server
+```
+
+## Deploying to Cloud Run
+
+```bash
+gcloud run deploy snagwalk --source . --region asia-south1 \
+  --set-env-vars GOOGLE_CLOUD_PROJECT=snagwalk-515212,GCS_BUCKET_NAME=snagwalk-photos-515212,VERTEX_AI_LOCATION=asia-south1,GEMINI_MODEL=gemini-3.5-flash,DB_HOST=...,DB_USER=...,DB_NAME=... \
+  --set-secrets DB_PASSWORD=snagwalk-db-password:latest \
+  --network <vpc> --subnet <subnet>
+```
+
+The service account needs `roles/aiplatform.user`, `roles/storage.objectAdmin` on the bucket, and VPC access to AlloyDB.
+
+## Guardrails
+
+See `.agents/skills/snagwalk-guardrails/SKILL.md`. In short: snake_case tables with uuid ids, parameterized
+SQL, no DROP/TRUNCATE, photos only in Cloud Storage, fixed category and severity enums, letters that never
+invent defects, one primary action per screen with large tap targets.

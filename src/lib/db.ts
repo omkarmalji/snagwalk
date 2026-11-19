@@ -1,10 +1,19 @@
-import { Pool, QueryResult, QueryResultRow } from 'pg';
+import { Pool, QueryResult, QueryResultRow, types } from 'pg';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { alloyDbStreamFactory, type AlloyDbIpType } from './alloydb-connector';
+
+// DATE columns come back as 'YYYY-MM-DD' strings. The default parser builds a local-midnight Date,
+// which toISOString() shifts to the previous day in IST.
+types.setTypeParser(1082, (v: string) => v);
 
 // AlloyDB / PostgreSQL connection. Read DB host, user and password from environment variables, never hardcode them.
-const dbHost = process.env.DB_HOST || process.env.PGHOST;
+// ALLOYDB_INSTANCE_URI (projects/<p>/locations/<r>/clusters/<c>/instances/<i>) connects through the built-in
+// AlloyDB connector (mTLS + IAM, no VPC needed). Otherwise DB_HOST is used as a plain Postgres host.
+const instanceUri = process.env.ALLOYDB_INSTANCE_URI?.trim() || '';
+const ipType = (process.env.ALLOYDB_IP_TYPE || 'PUBLIC').toUpperCase() as AlloyDbIpType;
+const dbHost = instanceUri ? `alloydb:${instanceUri.split('/').pop()}` : process.env.DB_HOST || process.env.PGHOST;
 const dbPort = parseInt(process.env.DB_PORT || process.env.PGPORT || '5432', 10);
 const dbUser = process.env.DB_USER || process.env.PGUSER || 'postgres';
 const dbPassword = process.env.DB_PASSWORD || process.env.PGPASSWORD || '';
@@ -24,22 +33,23 @@ const CIRCUIT_OPEN_MS = 5 * 60_000;
 // variables would give every route its own pool and its own circuit breaker.
 type DbState = {
   pool: Pool | null;
+  schemaReady: Promise<void> | null;
   circuitOpenUntil: number;
   lastDbError: string | null;
   lastMode: 'alloydb' | 'local' | null;
 };
 const g = globalThis as typeof globalThis & { __snagwalkDb?: DbState };
-const state: DbState = (g.__snagwalkDb ??= { pool: null, circuitOpenUntil: 0, lastDbError: null, lastMode: null });
+const state: DbState = (g.__snagwalkDb ??= { pool: null, schemaReady: null, circuitOpenUntil: 0, lastDbError: null, lastMode: null });
 
 export function getDbPool(): Pool {
   if (!state.pool) {
     const pool = (state.pool = new Pool({
-      host: dbHost,
-      port: dbPort,
+      ...(instanceUri
+        ? { stream: alloyDbStreamFactory(instanceUri, ipType), ssl: false }
+        : { host: dbHost, port: dbPort, ssl: dbSsl ? { rejectUnauthorized: false } : undefined }),
       user: dbUser,
       password: dbPassword,
       database: dbName,
-      ssl: dbSsl ? { rejectUnauthorized: false } : undefined,
       max: 5,
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: fallbackEnabled ? 2_500 : 10_000,
@@ -51,6 +61,63 @@ export function getDbPool(): Pool {
   return state.pool;
 }
 
+/**
+ * Idempotent schema bootstrap, run once per process before the first real query.
+ * CREATE ... IF NOT EXISTS only: never drops, renames or alters existing tables.
+ */
+// Mirrors the tables already provisioned in AlloyDB, so a fresh database ends up identical.
+const SCHEMA_SQL = [
+  `CREATE TABLE IF NOT EXISTS walks (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    buyer_name text NOT NULL,
+    builder_name text NOT NULL,
+    project_name text,
+    tower text,
+    flat_number text NOT NULL,
+    bhk smallint,
+    possession_date date,
+    letter_text text,
+    created_at timestamptz NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS rooms (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    walk_id uuid NOT NULL REFERENCES walks(id) ON DELETE CASCADE,
+    room_type text NOT NULL,
+    checklist jsonb,
+    status text NOT NULL DEFAULT 'pending',
+    created_at timestamptz NOT NULL DEFAULT now()
+  )`,
+  `CREATE TABLE IF NOT EXISTS snags (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    walk_id uuid NOT NULL REFERENCES walks(id) ON DELETE CASCADE,
+    room_id uuid NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    photo_url text NOT NULL,
+    category text NOT NULL,
+    severity text NOT NULL CHECK (severity IN ('minor', 'major', 'critical')),
+    description text NOT NULL,
+    location_note text,
+    created_at timestamptz NOT NULL DEFAULT now()
+  )`,
+  `CREATE INDEX IF NOT EXISTS rooms_walk_id_idx ON rooms (walk_id)`,
+  `CREATE INDEX IF NOT EXISTS snags_walk_id_idx ON snags (walk_id)`,
+  `CREATE INDEX IF NOT EXISTS snags_room_id_idx ON snags (room_id)`,
+];
+
+function ensureSchema(): Promise<void> {
+  state.schemaReady ??= (async () => {
+    const client = await getDbPool().connect();
+    try {
+      for (const sql of SCHEMA_SQL) await client.query(sql);
+    } finally {
+      client.release();
+    }
+  })().catch((err) => {
+    state.schemaReady = null; // retry on the next query
+    throw err;
+  });
+  return state.schemaReady;
+}
+
 /** True only for errors meaning "could not reach the database", never for SQL errors. */
 function isConnectionError(err: unknown): boolean {
   const e = err as { code?: string; message?: string };
@@ -60,7 +127,10 @@ function isConnectionError(err: unknown): boolean {
     ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'ECONNRESET', 'EAI_AGAIN'].includes(code) ||
     msg.includes('timeout exceeded when trying to connect') ||
     msg.includes('connection terminated') ||
-    msg.includes('connect etimedout')
+    msg.includes('connect etimedout') ||
+    msg.includes('alloydb admin api') ||
+    msg.includes('alloydb connector') ||
+    msg.includes('could not load the default credentials')
   );
 }
 
@@ -90,6 +160,7 @@ export async function query<T extends QueryResultRow = any>(
 
   if (dbHost && Date.now() >= state.circuitOpenUntil) {
     try {
+      await ensureSchema();
       const result = await getDbPool().query<T>(text, params);
       state.lastMode = 'alloydb';
       return result;

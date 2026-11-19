@@ -39,3 +39,6 @@ next-env.d.ts
 /public/uploads/
 /.local_uploads/
 /.playwright-mcp/
+
+# private session handoff notes
+*.local.md

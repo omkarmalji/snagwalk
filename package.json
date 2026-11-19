@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "release:hosting": "node scripts/release-hosting.mjs"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.15.2",

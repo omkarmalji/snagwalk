@@ -81,7 +81,8 @@ Service account `snagwalk-run` holds `roles/aiplatform.user`, `roles/alloydb.cli
 every Cloud Run deploy** to purge it:
 
 ```bash
-firebase deploy --only hosting
+pnpm release:hosting          # REST + ADC, no firebase login needed
+# or: firebase deploy --only hosting
 ```
 
 ## Guardrails

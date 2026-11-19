@@ -57,8 +57,16 @@ const md: Components = {
   p: (p) => <p className="my-3 text-[14.5px] leading-[1.7]" {...p} />,
   ul: (p) => <ul className="my-3 space-y-2 pl-0" {...p} />,
   ol: (p) => <ol className="my-3 list-decimal space-y-2 pl-5" {...p} />,
-  li: (p) => (
-    <li className="relative pl-4 text-[14.5px] leading-[1.65] before:absolute before:left-0 before:top-[0.7em] before:size-1 before:rounded-full before:bg-ink-3" {...p} />
+  // The bullet is a text glyph, not a positioned box: html2canvas draws text a few px lower than the browser,
+  // so only a glyph stays on the same baseline as the words in the exported PDF.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  li: ({ children, node, ...p }) => (
+    <li className="flex gap-2.5 text-[14.5px] leading-[1.65]" {...p}>
+      <span aria-hidden className="w-2 shrink-0 select-none text-ink-3">
+        •
+      </span>
+      <div className="min-w-0 flex-1">{children}</div>
+    </li>
   ),
   strong: (p) => <strong className="font-semibold text-ink" {...p} />,
   hr: () => <hr className="my-6 border-line" />,
@@ -156,6 +164,15 @@ export default function LetterPage() {
     setDownloading(true);
     try {
       const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
+
+      // Layout in CSS px at A4 width (794px = 210mm). Every page gets the same top and bottom margin.
+      const A4_W = 794;
+      const A4_H = Math.floor((A4_W * 297) / 210);
+      const MARGIN = 56;
+      const usable = A4_H - 2 * MARGIN;
+      // Blocks that must never be split across pages: their [top, bottom] in the cloned layout.
+      let blocks: Array<[number, number]> = [];
+
       const canvas = await html2canvas(paperRef.current, {
         scale: 2,
         useCORS: true,
@@ -164,24 +181,50 @@ export default function LetterPage() {
         // Lay the document out at A4 width whatever the device, so a phone and a laptop produce the same PDF.
         windowWidth: 1024,
         onclone: (_doc, el) => {
-          Object.assign(el.style, { width: '794px', padding: '64px 72px', borderRadius: '0', boxShadow: 'none' });
+          Object.assign(el.style, { width: `${A4_W}px`, padding: '8px 72px', borderRadius: '0', boxShadow: 'none' });
+          const origin = el.getBoundingClientRect().top;
+          blocks = Array.from(el.querySelectorAll('p, li, h1, h2, h3, h4, figure, tr, blockquote, hr, [data-pdf-keep]')).map((n) => {
+            const r = n.getBoundingClientRect();
+            // Headings travel with the block after them, so a heading never ends a page on its own.
+            const keepWithNext = /^H[1-4]$/.test(n.tagName) || n.hasAttribute('data-pdf-keep');
+            const next = keepWithNext ? n.nextElementSibling : null;
+            const bottom = next ? Math.max(r.bottom, next.getBoundingClientRect().bottom) : r.bottom;
+            return [r.top - origin, bottom - origin];
+          });
         },
       });
+
+      // Break each page at the last block boundary that fits, so text lines and photos are never cut in half.
+      const totalH = canvas.height / (canvas.width / A4_W);
+      const breaks: Array<[number, number]> = [];
+      for (let y = 0; y < totalH - 1; ) {
+        let end = Math.min(y + usable, totalH);
+        if (end < totalH) {
+          const straddling = blocks.filter(([top, bottom]) => top > y + 1 && top < end && bottom > end).map(([top]) => top);
+          const cut = straddling.length ? Math.min(...straddling) - 6 : end;
+          if (cut > y + usable * 0.25) end = cut; // a single block taller than a page is still cut
+        }
+        breaks.push([y, end]);
+        y = end;
+      }
+
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const pxPerMm = canvas.width / pageW;
-      const pagePx = Math.floor(pageH * pxPerMm);
-
-      // Slice the tall canvas into A4 pages instead of shifting one huge image.
-      for (let y = 0, page = 0; y < canvas.height; y += pagePx, page++) {
+      const mmPerCss = pageW / A4_W;
+      const scale = canvas.width / A4_W;
+      breaks.forEach(([from, to], page) => {
         const slice = document.createElement('canvas');
         slice.width = canvas.width;
-        slice.height = Math.min(pagePx, canvas.height - y);
-        slice.getContext('2d')!.drawImage(canvas, 0, y, canvas.width, slice.height, 0, 0, canvas.width, slice.height);
+        slice.height = Math.max(1, Math.round((to - from) * scale));
+        const ctx = slice.getContext('2d')!;
+        ctx.fillStyle = '#fffffd';
+        ctx.fillRect(0, 0, slice.width, slice.height);
+        ctx.drawImage(canvas, 0, Math.round(from * scale), canvas.width, slice.height, 0, 0, canvas.width, slice.height);
         if (page > 0) pdf.addPage();
-        pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pageW, slice.height / pxPerMm);
-      }
+        pdf.setFillColor(255, 255, 253);
+        pdf.rect(0, 0, pageW, pdf.internal.pageSize.getHeight(), 'F');
+        pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', 0, MARGIN * mmPerCss, pageW, (to - from) * mmPerCss);
+      });
       pdf.save(`Snag-notice-Flat-${data.walk.flat_number}-${data.walk.tower}.pdf`.replace(/\s+/g, '-'));
     } catch (err) {
       console.error('PDF export failed, using print dialog:', err);
@@ -272,11 +315,13 @@ export default function LetterPage() {
 
                   {snags.length > 0 && (
                     <section className="mt-10 border-t-2 border-ink pt-6">
-                      <h3 className="text-[15px] font-semibold tracking-tight">Annexure: photographs</h3>
-                      <p className="mt-1 text-[13px] text-ink-2">
-                        Flat {data!.walk.flat_number}, {data!.walk.tower}, {data!.walk.project}. Inspected{' '}
-                        {formatDate(data!.walk.possession_date)}.
-                      </p>
+                      <div data-pdf-keep>
+                        <h3 className="text-[15px] font-semibold tracking-tight">Annexure: photographs</h3>
+                        <p className="mt-1 text-[13px] text-ink-2">
+                          Flat {data!.walk.flat_number}, {data!.walk.tower}, {data!.walk.project}. Inspected{' '}
+                          {formatDate(data!.walk.possession_date)}.
+                        </p>
+                      </div>
                       <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3">
                         {snags.map((s) => (
                           <figure key={s.id} className="break-inside-avoid">

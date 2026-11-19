@@ -18,16 +18,22 @@ const dbSsl = process.env.DB_SSL === 'true';
 const fallbackEnabled =
   (process.env.DB_FALLBACK || (process.env.NODE_ENV === 'production' ? 'off' : 'on')).toLowerCase() !== 'off';
 
-const CIRCUIT_OPEN_MS = 60_000;
-let circuitOpenUntil = 0;
-let lastDbError: string | null = null;
-let lastMode: 'alloydb' | 'local' | null = null;
+const CIRCUIT_OPEN_MS = 5 * 60_000;
 
-let pool: Pool | null = null;
+// Process-wide state. Next.js can load this module once per route bundle, so module-level
+// variables would give every route its own pool and its own circuit breaker.
+type DbState = {
+  pool: Pool | null;
+  circuitOpenUntil: number;
+  lastDbError: string | null;
+  lastMode: 'alloydb' | 'local' | null;
+};
+const g = globalThis as typeof globalThis & { __snagwalkDb?: DbState };
+const state: DbState = (g.__snagwalkDb ??= { pool: null, circuitOpenUntil: 0, lastDbError: null, lastMode: null });
 
 export function getDbPool(): Pool {
-  if (!pool) {
-    pool = new Pool({
+  if (!state.pool) {
+    const pool = (state.pool = new Pool({
       host: dbHost,
       port: dbPort,
       user: dbUser,
@@ -37,12 +43,12 @@ export function getDbPool(): Pool {
       max: 5,
       idleTimeoutMillis: 10_000,
       connectionTimeoutMillis: fallbackEnabled ? 2_500 : 10_000,
-    });
+    }));
     pool.on('error', (err) => {
       console.warn('[db] pool client error:', err.message);
     });
   }
-  return pool;
+  return state.pool;
 }
 
 /** True only for errors meaning "could not reach the database", never for SQL errors. */
@@ -59,12 +65,12 @@ function isConnectionError(err: unknown): boolean {
 }
 
 export function getDbStatus() {
-  const circuitOpen = Date.now() < circuitOpenUntil;
+  const circuitOpen = Date.now() < state.circuitOpenUntil;
   return {
     configured: Boolean(dbHost),
     fallbackEnabled,
-    mode: !dbHost ? 'local' : circuitOpen ? 'local' : lastMode ?? 'unknown',
-    lastError: lastDbError,
+    mode: !dbHost ? 'local' : circuitOpen ? 'local' : state.lastMode ?? 'unknown',
+    lastError: state.lastDbError,
   };
 }
 
@@ -82,17 +88,17 @@ export async function query<T extends QueryResultRow = any>(
     throw new Error('Guardrail violation: DROP TABLE and TRUNCATE are prohibited.');
   }
 
-  if (dbHost && Date.now() >= circuitOpenUntil) {
+  if (dbHost && Date.now() >= state.circuitOpenUntil) {
     try {
       const result = await getDbPool().query<T>(text, params);
-      lastMode = 'alloydb';
+      state.lastMode = 'alloydb';
       return result;
     } catch (err) {
       if (!isConnectionError(err) || !fallbackEnabled) throw err;
-      lastDbError = (err as Error).message;
-      circuitOpenUntil = Date.now() + CIRCUIT_OPEN_MS;
+      state.lastDbError = (err as Error).message;
+      state.circuitOpenUntil = Date.now() + CIRCUIT_OPEN_MS;
       console.warn(
-        `[db] AlloyDB unreachable (${lastDbError}). Using local JSON store for ${CIRCUIT_OPEN_MS / 1000}s.`
+        `[db] AlloyDB unreachable (${state.lastDbError}). Using local JSON store for ${CIRCUIT_OPEN_MS / 1000}s.`
       );
     }
   } else if (dbHost && !fallbackEnabled) {
@@ -100,7 +106,7 @@ export async function query<T extends QueryResultRow = any>(
   }
 
   if (!fallbackEnabled) throw new Error('Database is not configured (DB_HOST missing) and DB_FALLBACK is off.');
-  lastMode = 'local';
+  state.lastMode = 'local';
   return handleLocalQuery<T>(text, params);
 }
 
@@ -194,6 +200,7 @@ function handleLocalQuery<T extends QueryResultRow>(text: string, params: unknow
   const lower = text.trim().toLowerCase().replace(/\s+/g, ' ');
   const store = loadStorage();
   const p = params as string[];
+  const isSelect = lower.startsWith('select');
 
   if (lower.startsWith('insert into walks')) {
     const [buyer_name, builder_name, project_name, tower, flat_number, bhk, possession_date] = params;
@@ -248,21 +255,21 @@ function handleLocalQuery<T extends QueryResultRow>(text: string, params: unknow
   }
 
   // walks
-  if (lower.includes('from walks') && lower.includes('where id = any($1')) {
+  if (isSelect && lower.includes('from walks') && lower.includes('where id = any($1')) {
     const ids = new Set((params[0] as string[]) || []);
     const rows = store.walks.filter((w) => ids.has(w.id)).sort(byCreatedAsc).reverse();
     return result(rows);
   }
-  if (lower.includes('from walks') && lower.includes('where id = $1')) {
+  if (isSelect && lower.includes('from walks') && lower.includes('where id = $1')) {
     return result(store.walks.filter((w) => w.id === p[0]));
   }
-  if (lower.includes('from walks')) {
+  if (isSelect && lower.includes('from walks')) {
     const limit = Number(lower.match(/limit (\d+)/)?.[1] || 50);
     return result([...store.walks].sort(byCreatedAsc).reverse().slice(0, limit));
   }
 
   // rooms joined with walks
-  if (lower.includes('from rooms r join walks w') && lower.includes('where r.id = $1')) {
+  if (isSelect && lower.includes('from rooms r join walks w') && lower.includes('where r.id = $1')) {
     const room = store.rooms.find((r) => r.id === p[0]);
     if (!room) return result([]);
     const walk = store.walks.find((w) => w.id === room.walk_id);
@@ -276,19 +283,19 @@ function handleLocalQuery<T extends QueryResultRow>(text: string, params: unknow
       },
     ]);
   }
-  if (lower.includes('from rooms') && lower.includes('where walk_id = $1')) {
+  if (isSelect && lower.includes('from rooms') && lower.includes('where walk_id = $1')) {
     return result(store.rooms.filter((r) => r.walk_id === p[0]).sort(byCreatedAsc));
   }
 
   // snags
-  if (lower.includes('from snags') && lower.includes('group by room_id')) {
+  if (isSelect && lower.includes('from snags') && lower.includes('group by room_id')) {
     const counts = new Map<string, number>();
     for (const s of store.snags.filter((s) => s.walk_id === p[0])) {
       counts.set(s.room_id, (counts.get(s.room_id) || 0) + 1);
     }
     return result(Array.from(counts, ([room_id, snag_count]) => ({ room_id, snag_count })));
   }
-  if (lower.includes('from snags s join rooms r') && lower.includes('where s.walk_id = $1')) {
+  if (isSelect && lower.includes('from snags s join rooms r') && lower.includes('where s.walk_id = $1')) {
     const rooms = new Map(store.rooms.map((r) => [r.id, r]));
     const rows = store.snags
       .filter((s) => s.walk_id === p[0])
@@ -297,10 +304,10 @@ function handleLocalQuery<T extends QueryResultRow>(text: string, params: unknow
       .map(({ _room_created, ...rest }) => { void _room_created; return rest; });
     return result(rows);
   }
-  if (lower.includes('from snags') && lower.includes('where room_id = $1')) {
+  if (isSelect && lower.includes('from snags') && lower.includes('where room_id = $1')) {
     return result(store.snags.filter((s) => s.room_id === p[0]).sort(byCreatedAsc));
   }
-  if (lower.includes('from snags') && lower.includes('where id = $1')) {
+  if (isSelect && lower.includes('from snags') && lower.includes('where id = $1')) {
     return result(store.snags.filter((s) => s.id === p[0]));
   }
 

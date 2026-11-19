@@ -11,8 +11,9 @@ const fallbackEnabled =
   (process.env.STORAGE_FALLBACK || (process.env.NODE_ENV === 'production' ? 'off' : 'on')).toLowerCase() !== 'off';
 
 let storageClient: Storage | null = null;
-let lastMode: 'gcs' | 'local' | null = null;
-let lastError: string | null = null;
+type StorageState = { lastMode: 'gcs' | 'local' | null; lastError: string | null };
+const g = globalThis as typeof globalThis & { __snagwalkStorage?: StorageState };
+const st: StorageState = (g.__snagwalkStorage ??= { lastMode: null, lastError: null });
 
 export function getStorage(): Storage {
   if (!storageClient) storageClient = new Storage({ projectId: PROJECT_ID });
@@ -20,7 +21,7 @@ export function getStorage(): Storage {
 }
 
 export function getStorageStatus() {
-  return { bucket: BUCKET_NAME, mode: lastMode ?? 'unknown', fallbackEnabled, lastError };
+  return { bucket: BUCKET_NAME, mode: st.lastMode ?? 'unknown', fallbackEnabled, lastError: st.lastError };
 }
 
 const EXT: Record<string, string> = {
@@ -48,15 +49,15 @@ export async function uploadPhotoToGcs(buffer: Buffer, mimeType: string): Promis
         resumable: false,
         metadata: { contentType: mimeType, cacheControl: 'private, max-age=31536000' },
       });
-    lastMode = 'gcs';
+    st.lastMode = 'gcs';
     return `https://storage.googleapis.com/${BUCKET_NAME}/${objectPath}`;
   } catch (err) {
-    lastError = (err as Error).message;
+    st.lastError = (err as Error).message;
     if (!fallbackEnabled) throw err;
-    console.warn(`[gcs] upload failed (${lastError}). Saving to local dev storage.`);
+    console.warn(`[gcs] upload failed (${st.lastError}). Saving to local dev storage.`);
     fs.mkdirSync(LOCAL_UPLOAD_DIR, { recursive: true });
     fs.writeFileSync(path.join(LOCAL_UPLOAD_DIR, filename), buffer);
-    lastMode = 'local';
+    st.lastMode = 'local';
     return `/api/photos/local/${filename}`;
   }
 }

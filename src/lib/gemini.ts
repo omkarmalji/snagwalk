@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type, type Schema } from '@google/genai';
+import { GoogleGenAI, MediaResolution, ThinkingLevel, Type, type Schema } from '@google/genai';
 
 /**
  * Gemini client for SnagWalk.
@@ -12,8 +12,11 @@ import { GoogleGenAI, Type, type Schema } from '@google/genai';
  */
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || 'snagwalk-515212';
-const LOCATION = process.env.VERTEX_AI_LOCATION || 'us-central1';
-export const MODEL_NAME = process.env.GEMINI_MODEL || process.env.VERTEX_AI_MODEL || 'gemini-2.5-flash';
+const LOCATION = process.env.VERTEX_AI_LOCATION || 'asia-south1';
+export const MODEL_NAME = process.env.GEMINI_MODEL || process.env.VERTEX_AI_MODEL || 'gemini-3.5-flash';
+// Low thinking keeps photo analysis around 3s (default thinking measured ~25s), which matters when the
+// buyer is standing in the flat. GEMINI_THINKING=off disables the setting for models that do not support it.
+const THINKING = (process.env.GEMINI_THINKING || 'low').toUpperCase();
 
 export type AiSource = 'gemini' | 'fallback';
 
@@ -74,11 +77,10 @@ type AuthMode = 'vertex-adc' | 'vertex-express' | 'gemini-api';
 let client: GoogleGenAI | null = null;
 let authMode: AuthMode | null = null;
 
-const status: { lastOk: string | null; lastError: string | null; lastErrorAt: string | null } = {
-  lastOk: null,
-  lastError: null,
-  lastErrorAt: null,
-};
+// Process-wide (Next.js may load this module once per route bundle).
+type AiStatus = { lastOk: string | null; lastError: string | null; lastErrorAt: string | null };
+const g = globalThis as typeof globalThis & { __snagwalkAi?: AiStatus };
+const status: AiStatus = (g.__snagwalkAi ??= { lastOk: null, lastError: null, lastErrorAt: null });
 
 function resolveAuth(): { mode: AuthMode; client: GoogleGenAI } {
   const forced = (process.env.GEMINI_AUTH || 'auto').toLowerCase();
@@ -131,6 +133,7 @@ async function generate(opts: {
   schema?: Schema;
   temperature?: number;
 }): Promise<string> {
+  // Medium image resolution: enough detail for hairline cracks, far fewer tokens than high.
   const parts: Array<Record<string, unknown>> = [];
   if (opts.image) parts.push({ inlineData: { data: opts.image.data, mimeType: opts.image.mimeType } });
   parts.push({ text: opts.prompt });
@@ -141,6 +144,8 @@ async function generate(opts: {
       contents: [{ role: 'user', parts }],
       config: {
         temperature: opts.temperature ?? 0.2,
+        ...(THINKING !== 'OFF' ? { thinkingConfig: { thinkingLevel: THINKING as ThinkingLevel } } : {}),
+        ...(opts.image ? { mediaResolution: MediaResolution.MEDIA_RESOLUTION_MEDIUM } : {}),
         ...(opts.schema ? { responseMimeType: 'application/json', responseSchema: opts.schema } : {}),
       },
     });
@@ -400,6 +405,7 @@ Rules (mandatory):
 3. Request rectification of all items within 15 days of receipt, and written confirmation of completion
    and a joint re-inspection before final handover and registration.
 4. Never invent, merge, or omit defects. Every photo number above appears exactly once. Do not add rooms that have no defects.
+   Do not invent any other facts either: no addresses, cities, agreement numbers or dates beyond those given above.
 5. Structure: date and addresses, a bold subject line, short opening paragraph, the room-by-room list,
    the 15-day request, closing, and a signature block with the buyer's name.
 6. Output clean Markdown only. No code fences, no preamble, no notes to the user. Do not use em dashes.`;

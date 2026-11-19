@@ -1,15 +1,27 @@
 import { Pool, QueryResult, QueryResultRow } from 'pg';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
-// AlloyDB / PostgreSQL connection configuration
-// Read DB host, user and password from environment variables, never hardcode them.
+// AlloyDB / PostgreSQL connection. Read DB host, user and password from environment variables, never hardcode them.
 const dbHost = process.env.DB_HOST || process.env.PGHOST;
 const dbPort = parseInt(process.env.DB_PORT || process.env.PGPORT || '5432', 10);
 const dbUser = process.env.DB_USER || process.env.PGUSER || 'postgres';
 const dbPassword = process.env.DB_PASSWORD || process.env.PGPASSWORD || '';
 const dbName = process.env.DB_NAME || process.env.PGDATABASE || 'postgres';
 const dbSsl = process.env.DB_SSL === 'true';
+
+/**
+ * Local JSON fallback is for development outside the GCP VPC only.
+ * DB_FALLBACK=off disables it (recommended on Cloud Run). Default: on in development, off in production.
+ */
+const fallbackEnabled =
+  (process.env.DB_FALLBACK || (process.env.NODE_ENV === 'production' ? 'off' : 'on')).toLowerCase() !== 'off';
+
+const CIRCUIT_OPEN_MS = 60_000;
+let circuitOpenUntil = 0;
+let lastDbError: string | null = null;
+let lastMode: 'alloydb' | 'local' | null = null;
 
 let pool: Pool | null = null;
 
@@ -23,18 +35,79 @@ export function getDbPool(): Pool {
       database: dbName,
       ssl: dbSsl ? { rejectUnauthorized: false } : undefined,
       max: 5,
-      idleTimeoutMillis: 10000,
-      connectionTimeoutMillis: 1500, // fast timeout for development resiliency
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: fallbackEnabled ? 2_500 : 10_000,
     });
-
     pool.on('error', (err) => {
-      console.warn('AlloyDB pool client error:', err.message);
+      console.warn('[db] pool client error:', err.message);
     });
   }
   return pool;
 }
 
-// Persistent disk-backed store for local dev resilience across Next.js worker processes
+/** True only for errors meaning "could not reach the database", never for SQL errors. */
+function isConnectionError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string };
+  const code = e?.code || '';
+  const msg = (e?.message || '').toLowerCase();
+  return (
+    ['ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH', 'ENETUNREACH', 'ECONNRESET', 'EAI_AGAIN'].includes(code) ||
+    msg.includes('timeout exceeded when trying to connect') ||
+    msg.includes('connection terminated') ||
+    msg.includes('connect etimedout')
+  );
+}
+
+export function getDbStatus() {
+  const circuitOpen = Date.now() < circuitOpenUntil;
+  return {
+    configured: Boolean(dbHost),
+    fallbackEnabled,
+    mode: !dbHost ? 'local' : circuitOpen ? 'local' : lastMode ?? 'unknown',
+    lastError: lastDbError,
+  };
+}
+
+/**
+ * Execute a parameterized query.
+ * Guardrail: parameterized SQL only, never concatenate user input. Never DROP TABLE or TRUNCATE.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function query<T extends QueryResultRow = any>(
+  text: string,
+  params: unknown[] = []
+): Promise<QueryResult<T>> {
+  const normalized = text.trim().toUpperCase();
+  if (/\bDROP\s+TABLE\b/.test(normalized) || /^TRUNCATE\b/.test(normalized)) {
+    throw new Error('Guardrail violation: DROP TABLE and TRUNCATE are prohibited.');
+  }
+
+  if (dbHost && Date.now() >= circuitOpenUntil) {
+    try {
+      const result = await getDbPool().query<T>(text, params);
+      lastMode = 'alloydb';
+      return result;
+    } catch (err) {
+      if (!isConnectionError(err) || !fallbackEnabled) throw err;
+      lastDbError = (err as Error).message;
+      circuitOpenUntil = Date.now() + CIRCUIT_OPEN_MS;
+      console.warn(
+        `[db] AlloyDB unreachable (${lastDbError}). Using local JSON store for ${CIRCUIT_OPEN_MS / 1000}s.`
+      );
+    }
+  } else if (dbHost && !fallbackEnabled) {
+    throw new Error('Database unavailable');
+  }
+
+  if (!fallbackEnabled) throw new Error('Database is not configured (DB_HOST missing) and DB_FALLBACK is off.');
+  lastMode = 'local';
+  return handleLocalQuery<T>(text, params);
+}
+
+// ---------------------------------------------------------------------------
+// Local JSON emulator (development only). Pattern-matches the exact SQL used by the API routes.
+// ---------------------------------------------------------------------------
+
 const STORAGE_FILE = path.join(process.cwd(), '.snagwalk_local_data.json');
 
 interface WalkRecord {
@@ -54,7 +127,7 @@ interface RoomRecord {
   id: string;
   walk_id: string;
   room_type: string;
-  checklist: any;
+  checklist: unknown;
   status: string;
   created_at: string;
 }
@@ -80,306 +153,189 @@ interface StorageSchema {
 function loadStorage(): StorageSchema {
   try {
     if (fs.existsSync(STORAGE_FILE)) {
-      const content = fs.readFileSync(STORAGE_FILE, 'utf-8');
-      return JSON.parse(content);
+      return JSON.parse(fs.readFileSync(STORAGE_FILE, 'utf-8'));
     }
   } catch (e) {
-    console.warn('Could not read local data store:', e);
+    console.warn('[db] could not read local data store:', e);
   }
   return { walks: [], rooms: [], snags: [] };
 }
 
 function saveStorage(data: StorageSchema) {
-  try {
-    fs.writeFileSync(STORAGE_FILE, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (e) {
-    console.warn('Could not save local data store:', e);
-  }
+  fs.writeFileSync(STORAGE_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
 
-/**
- * Execute a parameterized query on AlloyDB.
- * Guardrail Rule 3: Parameterized SQL queries only. Never concatenate user input into SQL.
- * Guardrail Rule 4: Never execute DROP TABLE or TRUNCATE.
- */
-export async function query<T extends QueryResultRow = any>(
-  text: string,
-  params: any[] = []
-): Promise<QueryResult<T>> {
-  // Guardrail Rule 4: Prohibit DROP TABLE and TRUNCATE
-  const normalizedQuery = text.trim().toUpperCase();
-  if (
-    normalizedQuery.startsWith('DROP ') ||
-    normalizedQuery.includes(' DROP TABLE ') ||
-    normalizedQuery.startsWith('TRUNCATE ')
-  ) {
-    throw new Error('Guardrail violation: DROP TABLE and TRUNCATE are prohibited.');
-  }
+// Monotonic timestamps so ORDER BY created_at is stable for rows inserted in the same millisecond.
+let lastTs = 0;
+function nowIso(): string {
+  lastTs = Math.max(Date.now(), lastTs + 1);
+  return new Date(lastTs).toISOString();
+}
 
-  // If DB host is configured, try direct PostgreSQL connection
-  if (dbHost) {
+const byCreatedAsc = (a: { created_at: string }, b: { created_at: string }) =>
+  a.created_at.localeCompare(b.created_at);
+
+function result<T extends QueryResultRow>(rows: unknown[], command = 'SELECT'): QueryResult<T> {
+  return { rows: rows as T[], rowCount: rows.length, command, oid: 0, fields: [] };
+}
+
+function parseJsonParam(v: unknown) {
+  if (typeof v === 'string') {
     try {
-      const db = getDbPool();
-      return await db.query<T>(text, params);
-    } catch (err: any) {
-      console.warn(
-        `AlloyDB connection not accessible directly from current network (${err.message}). Using persistent storage fallback for local development.`
-      );
-      return handleLocalQuery<T>(text, params);
+      return JSON.parse(v);
+    } catch {
+      return [];
     }
   }
-
-  return handleLocalQuery<T>(text, params);
+  return v ?? [];
 }
 
-/**
- * Persistent fallback SQL emulator for local dev when outside GCP VPC.
- */
-function handleLocalQuery<T extends QueryResultRow = any>(
-  text: string,
-  params: any[]
-): QueryResult<T> {
-  const q = text.trim();
-  const lower = q.toLowerCase();
+function handleLocalQuery<T extends QueryResultRow>(text: string, params: unknown[]): QueryResult<T> {
+  const lower = text.trim().toLowerCase().replace(/\s+/g, ' ');
   const store = loadStorage();
+  const p = params as string[];
 
-  const emptyResult: QueryResult<T> = {
-    rows: [] as T[],
-    command: '',
-    rowCount: 0,
-    oid: 0,
-    fields: [],
-  };
-
-  // CREATE TABLE check
-  if (lower.startsWith('create table') || lower.startsWith('create extension')) {
-    return emptyResult;
-  }
-
-  // INSERT INTO walks
   if (lower.startsWith('insert into walks')) {
-    const id = crypto.randomUUID();
     const [buyer_name, builder_name, project_name, tower, flat_number, bhk, possession_date] = params;
     const record: WalkRecord = {
-      id,
-      buyer_name,
-      builder_name,
-      project_name,
-      tower,
-      flat_number,
-      bhk: typeof bhk === 'number' ? bhk : parseInt(String(bhk), 10) || 2,
+      id: crypto.randomUUID(),
+      buyer_name: String(buyer_name),
+      builder_name: String(builder_name),
+      project_name: String(project_name),
+      tower: String(tower),
+      flat_number: String(flat_number),
+      bhk: Number(bhk) || 2,
       possession_date: String(possession_date),
       letter_text: null,
-      created_at: new Date().toISOString(),
+      created_at: nowIso(),
     };
     store.walks.push(record);
     saveStorage(store);
-    return { ...emptyResult, rows: [record as unknown as T], rowCount: 1 };
+    return result([record], 'INSERT');
   }
 
-  // INSERT INTO rooms
   if (lower.startsWith('insert into rooms')) {
-    const id = crypto.randomUUID();
     const [walk_id, room_type, status, checklist] = params;
     const record: RoomRecord = {
-      id,
-      walk_id,
-      room_type,
-      status: status || 'pending',
-      checklist: typeof checklist === 'string' ? JSON.parse(checklist) : checklist || [],
-      created_at: new Date().toISOString(),
+      id: crypto.randomUUID(),
+      walk_id: String(walk_id),
+      room_type: String(room_type),
+      status: String(status || 'pending'),
+      checklist: parseJsonParam(checklist),
+      created_at: nowIso(),
     };
     store.rooms.push(record);
     saveStorage(store);
-    return { ...emptyResult, rows: [record as unknown as T], rowCount: 1 };
+    return result([record], 'INSERT');
   }
 
-  // INSERT INTO snags
   if (lower.startsWith('insert into snags')) {
-    const id = crypto.randomUUID();
     const [walk_id, room_id, category, severity, description, location_note, photo_url] = params;
     const record: SnagRecord = {
-      id,
-      walk_id,
-      room_id,
-      category,
-      severity,
-      description,
-      location_note: location_note || null,
-      photo_url,
-      created_at: new Date().toISOString(),
+      id: crypto.randomUUID(),
+      walk_id: String(walk_id),
+      room_id: String(room_id),
+      category: String(category),
+      severity: String(severity),
+      description: String(description),
+      location_note: (location_note as string) || null,
+      photo_url: String(photo_url),
+      created_at: nowIso(),
     };
     store.snags.push(record);
     saveStorage(store);
-    return { ...emptyResult, rows: [record as unknown as T], rowCount: 1 };
+    return result([record], 'INSERT');
   }
 
-  // SELECT ... FROM walks WHERE id = $1
+  // walks
+  if (lower.includes('from walks') && lower.includes('where id = any($1')) {
+    const ids = new Set((params[0] as string[]) || []);
+    const rows = store.walks.filter((w) => ids.has(w.id)).sort(byCreatedAsc).reverse();
+    return result(rows);
+  }
   if (lower.includes('from walks') && lower.includes('where id = $1')) {
-    const walkId = params[0];
-    const walk = store.walks.find((w) => w.id === walkId);
-    return {
-      ...emptyResult,
-      rows: walk ? [walk as unknown as T] : [],
-      rowCount: walk ? 1 : 0,
-    };
+    return result(store.walks.filter((w) => w.id === p[0]));
+  }
+  if (lower.includes('from walks')) {
+    const limit = Number(lower.match(/limit (\d+)/)?.[1] || 50);
+    return result([...store.walks].sort(byCreatedAsc).reverse().slice(0, limit));
   }
 
-  // SELECT ... FROM walks ORDER BY created_at
-  if (lower.includes('from walks') && !lower.includes('where')) {
-    return {
-      ...emptyResult,
-      rows: store.walks as unknown as T[],
-      rowCount: store.walks.length,
-    };
-  }
-
-  // SELECT ... FROM rooms WHERE walk_id = $1
-  if (lower.includes('from rooms') && lower.includes('where walk_id = $1')) {
-    const walkId = params[0];
-    const rooms = store.rooms.filter((r) => r.walk_id === walkId);
-    return {
-      ...emptyResult,
-      rows: rooms as unknown as T[],
-      rowCount: rooms.length,
-    };
-  }
-
-  // SELECT ... FROM rooms r JOIN walks w ... WHERE r.id = $1
-  if (lower.includes('from rooms') && lower.includes('where r.id = $1')) {
-    const roomId = params[0];
-    const room = store.rooms.find((r) => r.id === roomId);
-    if (!room) return emptyResult;
+  // rooms joined with walks
+  if (lower.includes('from rooms r join walks w') && lower.includes('where r.id = $1')) {
+    const room = store.rooms.find((r) => r.id === p[0]);
+    if (!room) return result([]);
     const walk = store.walks.find((w) => w.id === room.walk_id);
-    const combined = {
-      ...room,
-      bhk: walk?.bhk || 2,
-      project_name: walk?.project_name || '',
-      builder_name: walk?.builder_name || '',
-      flat_number: walk?.flat_number || '',
-    };
-    return {
-      ...emptyResult,
-      rows: [combined as unknown as T],
-      rowCount: 1,
-    };
+    return result([
+      {
+        ...room,
+        bhk: walk?.bhk ?? 2,
+        project_name: walk?.project_name ?? '',
+        builder_name: walk?.builder_name ?? '',
+        flat_number: walk?.flat_number ?? '',
+      },
+    ]);
+  }
+  if (lower.includes('from rooms') && lower.includes('where walk_id = $1')) {
+    return result(store.rooms.filter((r) => r.walk_id === p[0]).sort(byCreatedAsc));
   }
 
-  // SELECT ... FROM rooms WHERE id = $1
-  if (lower.includes('from rooms') && lower.includes('where id = $1')) {
-    const roomId = params[0];
-    const room = store.rooms.find((r) => r.id === roomId);
-    return {
-      ...emptyResult,
-      rows: room ? [room as unknown as T] : [],
-      rowCount: room ? 1 : 0,
-    };
-  }
-
-  // SELECT snags count per room
+  // snags
   if (lower.includes('from snags') && lower.includes('group by room_id')) {
-    const walkId = params[0];
-    const walkSnags = store.snags.filter((s) => s.walk_id === walkId);
     const counts = new Map<string, number>();
-    for (const s of walkSnags) {
+    for (const s of store.snags.filter((s) => s.walk_id === p[0])) {
       counts.set(s.room_id, (counts.get(s.room_id) || 0) + 1);
     }
-    const rows = Array.from(counts.entries()).map(([room_id, snag_count]) => ({
-      room_id,
-      snag_count,
-    }));
-    return { ...emptyResult, rows: rows as unknown as T[], rowCount: rows.length };
+    return result(Array.from(counts, ([room_id, snag_count]) => ({ room_id, snag_count })));
   }
-
-  // SELECT ... FROM snags WHERE walk_id = $1
-  if (lower.includes('from snags') && lower.includes('where s.walk_id = $1')) {
-    const walkId = params[0];
-    const snags = store.snags
-      .filter((s) => s.walk_id === walkId)
-      .map((s) => {
-        const room = store.rooms.find((r) => r.id === s.room_id);
-        return { ...s, room_type: room?.room_type || 'Room' };
-      });
-    return {
-      ...emptyResult,
-      rows: snags as unknown as T[],
-      rowCount: snags.length,
-    };
+  if (lower.includes('from snags s join rooms r') && lower.includes('where s.walk_id = $1')) {
+    const rooms = new Map(store.rooms.map((r) => [r.id, r]));
+    const rows = store.snags
+      .filter((s) => s.walk_id === p[0])
+      .map((s) => ({ ...s, room_type: rooms.get(s.room_id)?.room_type ?? 'Room', _room_created: rooms.get(s.room_id)?.created_at ?? '' }))
+      .sort((a, b) => a._room_created.localeCompare(b._room_created) || byCreatedAsc(a, b))
+      .map(({ _room_created, ...rest }) => { void _room_created; return rest; });
+    return result(rows);
   }
-
-  // SELECT ... FROM snags WHERE room_id = $1
   if (lower.includes('from snags') && lower.includes('where room_id = $1')) {
-    const roomId = params[0];
-    const snags = store.snags.filter((s) => s.room_id === roomId);
-    return {
-      ...emptyResult,
-      rows: snags as unknown as T[],
-      rowCount: snags.length,
-    };
+    return result(store.snags.filter((s) => s.room_id === p[0]).sort(byCreatedAsc));
   }
-
-  // SELECT ... FROM snags WHERE id = $1
   if (lower.includes('from snags') && lower.includes('where id = $1')) {
-    const snagId = params[0];
-    const snag = store.snags.find((s) => s.id === snagId);
-    return {
-      ...emptyResult,
-      rows: snag ? [snag as unknown as T] : [],
-      rowCount: snag ? 1 : 0,
-    };
+    return result(store.snags.filter((s) => s.id === p[0]));
   }
 
-  // UPDATE rooms SET checklist = $1 WHERE id = $2
+  // updates
   if (lower.startsWith('update rooms set checklist = $1 where id = $2')) {
-    const [checklist, id] = params;
-    const room = store.rooms.find((r) => r.id === id);
-    if (room) {
-      room.checklist = typeof checklist === 'string' ? JSON.parse(checklist) : checklist;
-      saveStorage(store);
-      return { ...emptyResult, rows: [room as unknown as T], rowCount: 1 };
-    }
+    const room = store.rooms.find((r) => r.id === p[1]);
+    if (!room) return result([], 'UPDATE');
+    room.checklist = parseJsonParam(params[0]);
+    saveStorage(store);
+    return result([room], 'UPDATE');
   }
-
-  // UPDATE walks SET letter_text = $1 WHERE id = $2
-  if (lower.includes('update walks set letter_text = $1 where id = $2')) {
-    const [letter_text, id] = params;
-    const walk = store.walks.find((w) => w.id === id);
-    if (walk) {
-      walk.letter_text = letter_text;
-      saveStorage(store);
-      return { ...emptyResult, rows: [walk as unknown as T], rowCount: 1 };
-    }
+  if (lower.startsWith('update walks set letter_text = $1 where id = $2')) {
+    const walk = store.walks.find((w) => w.id === p[1]);
+    if (!walk) return result([], 'UPDATE');
+    walk.letter_text = (params[0] as string) ?? null;
+    saveStorage(store);
+    return result([walk], 'UPDATE');
   }
-
-  // UPDATE snags
   if (lower.startsWith('update snags set category = $1, severity = $2, description = $3, location_note = $4 where id = $5')) {
-    const [category, severity, description, location_note, id] = params;
-    const snag = store.snags.find((s) => s.id === id);
-    if (snag) {
-      snag.category = category;
-      snag.severity = severity;
-      snag.description = description;
-      snag.location_note = location_note;
-      saveStorage(store);
-      return { ...emptyResult, rows: [snag as unknown as T], rowCount: 1 };
-    }
+    const snag = store.snags.find((s) => s.id === p[4]);
+    if (!snag) return result([], 'UPDATE');
+    Object.assign(snag, { category: p[0], severity: p[1], description: p[2], location_note: p[3] ?? null });
+    saveStorage(store);
+    return result([snag], 'UPDATE');
   }
 
-  // DELETE FROM snags WHERE id = $1
+  // deletes
   if (lower.startsWith('delete from snags where id = $1')) {
-    const id = params[0];
-    const idx = store.snags.findIndex((s) => s.id === id);
-    if (idx !== -1) {
-      store.snags.splice(idx, 1);
-      saveStorage(store);
-      return { ...emptyResult, rowCount: 1 };
-    }
+    const idx = store.snags.findIndex((s) => s.id === p[0]);
+    if (idx === -1) return result([], 'DELETE');
+    const [removed] = store.snags.splice(idx, 1);
+    saveStorage(store);
+    return result([removed], 'DELETE');
   }
 
-  return emptyResult;
-}
-
-export async function initializeDatabase() {
-  // Tables already exist in AlloyDB per user requirements.
-  return;
+  console.warn('[db] local emulator: unmatched query:', lower.slice(0, 120));
+  return result([]);
 }

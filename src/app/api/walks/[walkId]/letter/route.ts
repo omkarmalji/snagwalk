@@ -1,93 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { query } from '@/lib/db';
 import { generateSnagLetter } from '@/lib/gemini';
+import {
+  getNumberedSnags,
+  getWalk,
+  isUuid,
+  letterFingerprint,
+  packLetter,
+  toLetterWalk,
+  unpackLetter,
+} from '@/lib/walks';
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ walkId: string }> }
-) {
+type Ctx = { params: Promise<{ walkId: string }> };
+
+/** Returns the saved letter and whether it is stale relative to the current snags. */
+export async function GET(_req: NextRequest, { params }: Ctx) {
   try {
     const { walkId } = await params;
+    if (!isUuid(walkId)) return NextResponse.json({ error: 'Walk not found' }, { status: 404 });
+    const found = await getWalk(walkId);
+    if (!found) return NextResponse.json({ error: 'Walk not found' }, { status: 404 });
 
-    // Fetch walk info (exact columns)
-    const walkResult = await query(
-      `SELECT id, buyer_name, builder_name, project_name, tower, flat_number, bhk, possession_date, letter_text, created_at
-       FROM walks WHERE id = $1`,
-      [walkId]
-    );
-
-    if (!walkResult.rows || walkResult.rows.length === 0) {
-      return NextResponse.json({ error: 'Walk not found' }, { status: 404 });
-    }
-
-    const row = walkResult.rows[0];
-    const walk = {
-      ...row,
-      builder: row.builder_name,
-      project: row.project_name,
-      bhk: `${row.bhk} BHK`,
-    };
-
-    // Fetch rooms
-    const roomsResult = await query(
-      `SELECT id, room_type
-       FROM rooms WHERE walk_id = $1
-       ORDER BY created_at ASC`,
-      [walkId]
-    );
-
-    // Fetch all snags from the snags table
-    const snagsResult = await query(
-      `SELECT s.id, s.room_id, s.category, s.severity, s.description, s.location_note, s.photo_url, s.created_at, r.room_type
-       FROM snags s
-       JOIN rooms r ON s.room_id = r.id
-       WHERE s.walk_id = $1
-       ORDER BY r.created_at ASC, s.created_at ASC`,
-      [walkId]
-    );
-
-    let photoIndex = 1;
-    const snagsWithNumbers = (snagsResult.rows || []).map((s) => ({
-      ...s,
-      room_name: s.room_type,
-      photo_number: photoIndex++,
-    }));
-
-    const snagsByRoom = (roomsResult.rows || []).map((r) => ({
-      room_name: r.room_type,
-      snags: snagsWithNumbers
-        .filter((s) => s.room_id === r.id)
-        .map((s) => ({
-          photo_number: s.photo_number,
-          category: s.category,
-          severity: s.severity,
-          description: s.description,
-          location_note: s.location_note,
-          photo_url: s.photo_url,
-        })),
-    }));
-
-    // Call Gemini to write the letter following strict snag letter rules
-    const letter = await generateSnagLetter(walk, snagsByRoom);
-
-    // Persist letter_text back to walks table
-    await query(
-      `UPDATE walks SET letter_text = $1 WHERE id = $2`,
-      [letter, walkId]
-    );
-
+    const { snags, groups } = await getNumberedSnags(walkId);
+    const saved = unpackLetter(found.letterText);
     return NextResponse.json({
-      success: true,
-      letter,
-      walk,
-      snags: snagsWithNumbers,
-      snags_by_room: snagsByRoom,
+      walk: found.walk,
+      snags,
+      letter: saved?.markdown ?? null,
+      source: saved?.source ?? null,
+      stale: saved ? saved.fp !== letterFingerprint(found.walk, groups) : true,
     });
-  } catch (error: any) {
-    console.error('Error generating snag letter:', error);
-    return NextResponse.json(
-      { error: error.message || 'Failed to generate snag letter' },
-      { status: 500 }
-    );
+  } catch (error) {
+    console.error('[api/letter] GET failed:', error);
+    return NextResponse.json({ error: 'Could not load the letter.' }, { status: 500 });
+  }
+}
+
+/** Generates the builder letter from the snags table (never invents defects) and persists it. */
+export async function POST(_req: NextRequest, { params }: Ctx) {
+  try {
+    const { walkId } = await params;
+    if (!isUuid(walkId)) return NextResponse.json({ error: 'Walk not found' }, { status: 404 });
+    const found = await getWalk(walkId);
+    if (!found) return NextResponse.json({ error: 'Walk not found' }, { status: 404 });
+
+    const { snags, groups } = await getNumberedSnags(walkId);
+    const { data: markdown, source } = await generateSnagLetter(toLetterWalk(found.walk), groups);
+    const fp = letterFingerprint(found.walk, groups);
+
+    await query(`UPDATE walks SET letter_text = $1 WHERE id = $2`, [packLetter(markdown, fp, source), walkId]);
+
+    return NextResponse.json({ walk: found.walk, snags, letter: markdown, source, stale: false });
+  } catch (error) {
+    console.error('[api/letter] POST failed:', error);
+    return NextResponse.json({ error: 'Could not generate the letter.' }, { status: 500 });
   }
 }

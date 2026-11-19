@@ -1,9 +1,26 @@
-import { VertexAI } from '@google-cloud/vertexai';
+import { GoogleGenAI, Type, type Schema } from '@google/genai';
+
+/**
+ * Gemini client for SnagWalk.
+ *
+ * Auth resolution (GEMINI_AUTH=auto by default):
+ *  - GEMINI_API_KEY starting with "AQ." -> Vertex AI express mode key
+ *  - any other GEMINI_API_KEY            -> Gemini API (AI Studio) key
+ *  - no key                              -> Vertex AI with Application Default Credentials
+ *    (Cloud Run service account, or `gcloud auth application-default login` locally)
+ * Force a mode with GEMINI_AUTH=adc | apikey.
+ */
 
 const PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || 'snagwalk-515212';
 const LOCATION = process.env.VERTEX_AI_LOCATION || 'us-central1';
-// Latest Flash model on Vertex AI
-const MODEL_NAME = process.env.VERTEX_AI_MODEL || 'gemini-1.5-flash';
+export const MODEL_NAME = process.env.GEMINI_MODEL || process.env.VERTEX_AI_MODEL || 'gemini-2.5-flash';
+
+export type AiSource = 'gemini' | 'fallback';
+
+export interface AiResult<T> {
+  data: T;
+  source: AiSource;
+}
 
 export type SnagCategory =
   | 'wall_paint'
@@ -18,21 +35,7 @@ export type SnagCategory =
 
 export type SnagSeverity = 'minor' | 'major' | 'critical';
 
-export interface SnagAnalysisResult {
-  category: SnagCategory;
-  severity: SnagSeverity;
-  description: string;
-  location_note: string;
-}
-
-export interface ChecklistItem {
-  id: string;
-  item: string;
-  category: string;
-  checked: boolean;
-}
-
-const VALID_CATEGORIES: SnagCategory[] = [
+export const VALID_CATEGORIES: SnagCategory[] = [
   'wall_paint',
   'tiles',
   'plumbing',
@@ -44,373 +47,409 @@ const VALID_CATEGORIES: SnagCategory[] = [
   'other',
 ];
 
-const VALID_SEVERITIES: SnagSeverity[] = ['minor', 'major', 'critical'];
+export const VALID_SEVERITIES: SnagSeverity[] = ['minor', 'major', 'critical'];
 
-/**
- * Helper to call Vertex AI or fallback to direct Gemini API with key
- */
-async function callGemini(
-  prompt: string,
-  imagePart?: { inlineData: { data: string; mimeType: string } },
-  responseSchema?: any
-): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.STITCH_GOOGLE_API_KEY;
-
-  // Try Vertex AI first (standard production method on Cloud Run / GCP)
-  try {
-    const vertexAI = new VertexAI({ project: PROJECT_ID, location: LOCATION });
-    const generativeModel = vertexAI.getGenerativeModel({
-      model: MODEL_NAME,
-      generationConfig: {
-        temperature: 0.2,
-        responseMimeType: responseSchema ? 'application/json' : undefined,
-      },
-    });
-
-    const parts: any[] = [{ text: prompt }];
-    if (imagePart) {
-      parts.push({
-        inlineData: {
-          mimeType: imagePart.inlineData.mimeType,
-          data: imagePart.inlineData.data,
-        },
-      });
-    }
-
-    const response = await generativeModel.generateContent({
-      contents: [{ role: 'user', parts }],
-    });
-
-    const text = response.response.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (text) {
-      return text;
-    }
-  } catch (vertexErr: any) {
-    console.warn(`Vertex AI call failed (${vertexErr.message}). Attempting API Key fallback.`);
-  }
-
-  // Fallback: Gemini API via REST if API key is present
-  if (apiKey) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-      const parts: any[] = [{ text: prompt }];
-      if (imagePart) {
-        parts.push({
-          inlineData: {
-            mimeType: imagePart.inlineData.mimeType,
-            data: imagePart.inlineData.data,
-          },
-        });
-      }
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts }],
-          generationConfig: {
-            temperature: 0.2,
-          },
-        }),
-      });
-
-      if (res.ok) {
-        const json = await res.json();
-        const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (text) return text;
-      } else {
-        const errText = await res.text();
-        console.warn('Direct Gemini API returned error:', errText);
-      }
-    } catch (apiKeyErr: any) {
-      console.warn('Direct Gemini API fallback failed:', apiKeyErr.message);
-    }
-  }
-
-  throw new Error('Unable to contact Gemini on Vertex AI or fallback API.');
+export interface SnagAnalysisResult {
+  category: SnagCategory;
+  severity: SnagSeverity;
+  description: string;
+  location_note: string;
+  /** Defect bounding box [ymin, xmin, ymax, xmax] normalised to 0-1000. Review-only, not persisted. */
+  box_2d?: [number, number, number, number] | null;
 }
 
-/**
- * Screen 2: Generate short checklist for room possession walk
- */
-export async function generateRoomChecklist(
-  roomName: string,
-  roomType: string,
-  context?: { bhk?: string; project?: string }
-): Promise<ChecklistItem[]> {
-  const prompt = `You are an expert real estate possession engineer inspecting a newly constructed Indian apartment during key handover.
-Generate a concise, high-priority possession-day snag checklist for the room: "${roomName}" (${roomType || roomName}).
-Focus on critical and common builder defects (paint patches, hollow tiles, pipe leaks, socket earthing, window latches, slope towards water drain).
-Return a strict JSON array of 4 to 6 items.
-Format:
-[
-  { "id": "1", "item": "Inspect wall paint for uneven patches, roller marks, or dampness", "category": "wall_paint", "checked": false },
-  ...
-]
-Only return valid JSON array. Do not include markdown codeblocks or extra text.`;
+export interface ChecklistItem {
+  id: string;
+  item: string;
+  category: string;
+  checked: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Client + status tracking
+// ---------------------------------------------------------------------------
+
+type AuthMode = 'vertex-adc' | 'vertex-express' | 'gemini-api';
+
+let client: GoogleGenAI | null = null;
+let authMode: AuthMode | null = null;
+
+const status: { lastOk: string | null; lastError: string | null; lastErrorAt: string | null } = {
+  lastOk: null,
+  lastError: null,
+  lastErrorAt: null,
+};
+
+function resolveAuth(): { mode: AuthMode; client: GoogleGenAI } {
+  const forced = (process.env.GEMINI_AUTH || 'auto').toLowerCase();
+  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+
+  if (forced === 'adc' || (forced === 'auto' && !apiKey)) {
+    return {
+      mode: 'vertex-adc',
+      client: new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location: LOCATION }),
+    };
+  }
+  if (apiKey.startsWith('AQ.')) {
+    return { mode: 'vertex-express', client: new GoogleGenAI({ vertexai: true, apiKey }) };
+  }
+  return { mode: 'gemini-api', client: new GoogleGenAI({ apiKey }) };
+}
+
+function getClient(): GoogleGenAI {
+  if (!client) {
+    const resolved = resolveAuth();
+    client = resolved.client;
+    authMode = resolved.mode;
+  }
+  return client;
+}
+
+export function getAiStatus() {
+  getClient();
+  return {
+    model: MODEL_NAME,
+    auth: authMode,
+    project: authMode === 'vertex-adc' ? PROJECT_ID : undefined,
+    location: authMode === 'vertex-adc' ? LOCATION : undefined,
+    lastOk: status.lastOk,
+    lastError: status.lastError,
+    lastErrorAt: status.lastErrorAt,
+  };
+}
+
+function shortError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  // Google errors embed a JSON blob; keep the first sentence readable.
+  const match = msg.match(/"message":\s*"([^"]+)/);
+  return (match ? match[1] : msg).slice(0, 300);
+}
+
+async function generate(opts: {
+  prompt: string;
+  image?: { data: string; mimeType: string };
+  schema?: Schema;
+  temperature?: number;
+}): Promise<string> {
+  const parts: Array<Record<string, unknown>> = [];
+  if (opts.image) parts.push({ inlineData: { data: opts.image.data, mimeType: opts.image.mimeType } });
+  parts.push({ text: opts.prompt });
 
   try {
-    const raw = await callGemini(prompt);
-    const cleaned = raw.replace(/```json/g, '').replace(/```/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.map((item, idx) => ({
-        id: String(item.id || idx + 1),
-        item: String(item.item || item),
-        category: String(item.category || 'other'),
-        checked: false,
-      }));
-    }
-  } catch (err: any) {
-    console.warn(`Gemini checklist generation failed for ${roomName}:`, err.message);
+    const res = await getClient().models.generateContent({
+      model: MODEL_NAME,
+      contents: [{ role: 'user', parts }],
+      config: {
+        temperature: opts.temperature ?? 0.2,
+        ...(opts.schema ? { responseMimeType: 'application/json', responseSchema: opts.schema } : {}),
+      },
+    });
+    const text = res.text;
+    if (!text) throw new Error('Gemini returned an empty response');
+    status.lastOk = new Date().toISOString();
+    return text;
+  } catch (err) {
+    status.lastError = shortError(err);
+    status.lastErrorAt = new Date().toISOString();
+    console.warn(`[gemini] ${authMode} call failed: ${status.lastError}`);
+    throw err;
   }
+}
 
-  // Default checklist fallback based on room type if offline
-  return getDefaultChecklist(roomName);
+function parseJson<T>(raw: string): T {
+  const cleaned = raw.replace(/```json/g, '').replace(/```/g, '').trim();
+  return JSON.parse(cleaned) as T;
+}
+
+// ---------------------------------------------------------------------------
+// Screen 2: room checklist
+// ---------------------------------------------------------------------------
+
+const checklistSchema: Schema = {
+  type: Type.ARRAY,
+  minItems: '4',
+  maxItems: '6',
+  items: {
+    type: Type.OBJECT,
+    properties: {
+      item: { type: Type.STRING, description: 'One concrete check, imperative voice, max 16 words' },
+      category: { type: Type.STRING, enum: VALID_CATEGORIES },
+    },
+    required: ['item', 'category'],
+    propertyOrdering: ['item', 'category'],
+  },
+};
+
+export async function generateRoomChecklist(
+  roomName: string,
+  context?: { bhk?: string; project?: string }
+): Promise<AiResult<ChecklistItem[]>> {
+  const prompt = `You are a possession-day snagging engineer inspecting a newly built Indian apartment${
+    context?.bhk ? ` (${context.bhk})` : ''
+  }.
+Write a 4 to 6 item checklist for the room "${roomName}".
+Prioritise defects buyers commonly miss and builders must fix before handover: hollow tiles, tile slope to drain,
+dampness, paint finish, socket earthing, window locks and tracks, door alignment, plumbing leaks.
+Each item must be a specific physical check the buyer can do in under a minute with their phone and hands.`;
+
+  try {
+    const raw = await generate({ prompt, schema: checklistSchema, temperature: 0.4 });
+    const parsed = parseJson<Array<{ item: string; category: string }>>(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return {
+        source: 'gemini',
+        data: parsed.slice(0, 6).map((it, idx) => ({
+          id: String(idx + 1),
+          item: String(it.item),
+          category: VALID_CATEGORIES.includes(it.category as SnagCategory) ? it.category : 'other',
+          checked: false,
+        })),
+      };
+    }
+  } catch {
+    // fall through to the offline checklist
+  }
+  return { source: 'fallback', data: getDefaultChecklist(roomName) };
 }
 
 function getDefaultChecklist(roomName: string): ChecklistItem[] {
   const lower = roomName.toLowerCase();
+  const make = (items: Array<[string, string]>) =>
+    items.map(([item, category], i) => ({ id: String(i + 1), item, category, checked: false }));
+
   if (lower.includes('kitchen')) {
-    return [
-      { id: '1', item: 'Check granite countertop edges, joints, and sink silicon sealing', category: 'woodwork', checked: false },
-      { id: '2', item: 'Test water flow in sink tap and check drain bottle trap for leaks', category: 'plumbing', checked: false },
-      { id: '3', item: 'Verify chimney / exhaust point electrical socket and switch function', category: 'electrical', checked: false },
-      { id: '4', item: 'Inspect wall dado tiles for cracks, hollowness, or missing grout', category: 'tiles', checked: false },
-    ];
-  } else if (lower.includes('bath')) {
-    return [
-      { id: '1', item: 'Check floor tile slope towards water drain (no water pooling)', category: 'tiles', checked: false },
-      { id: '2', item: 'Inspect CPVC/Chrome fittings, health faucet, and angle valves for dripping', category: 'plumbing', checked: false },
-      { id: '3', item: 'Test flush valve / cistern pressure and check commode base sealing', category: 'plumbing', checked: false },
-      { id: '4', item: 'Check geyser electrical points and mirror light switch operation', category: 'electrical', checked: false },
-    ];
-  } else if (lower.includes('balcony')) {
-    return [
-      { id: '1', item: 'Inspect MS/Glass railing height (minimum 1.2m), weld strength, and rust spots', category: 'doors_windows', checked: false },
-      { id: '2', item: 'Test rainwater drainage slope and check drain cover grating', category: 'flooring', checked: false },
-      { id: '3', item: 'Inspect exterior weather-coat paint for cracks, peeling, or seepage', category: 'wall_paint', checked: false },
-      { id: '4', item: 'Check weatherproof electrical socket and washing machine tap point', category: 'electrical', checked: false },
-    ];
-  } else {
-    return [
-      { id: '1', item: 'Check walls and ceiling under good light for waviness, patches, or paint drips', category: 'wall_paint', checked: false },
-      { id: '2', item: 'Test UPVC/Aluminium sliding window lock, track smoothness, and glass sealant', category: 'doors_windows', checked: false },
-      { id: '3', item: 'Tap vitrified floor tiles with coin/mallet to test for hollow sound', category: 'flooring', checked: false },
-      { id: '4', item: 'Test door latch, lock cylinders, stopper, and wooden frame alignment', category: 'doors_windows', checked: false },
-      { id: '5', item: 'Inspect switchboards, earthing, and AC power socket wiring', category: 'electrical', checked: false },
-    ];
+    return make([
+      ['Check granite countertop edges, joints and sink silicone sealing', 'woodwork'],
+      ['Run the sink tap and check the drain trap for leaks', 'plumbing'],
+      ['Test chimney and appliance sockets with a phone charger', 'electrical'],
+      ['Tap dado tiles for hollow sound and look for missing grout', 'tiles'],
+    ]);
   }
+  if (lower.includes('bath') || lower.includes('toilet')) {
+    return make([
+      ['Pour water on the floor and confirm it flows to the drain', 'tiles'],
+      ['Check taps, health faucet and angle valves for drips', 'plumbing'],
+      ['Flush twice and check the commode base for seepage', 'plumbing'],
+      ['Test geyser and mirror light points', 'electrical'],
+    ]);
+  }
+  if (lower.includes('balcony') || lower.includes('utility')) {
+    return make([
+      ['Check railing height, weld joints and rust spots', 'doors_windows'],
+      ['Pour water and confirm it drains without pooling', 'flooring'],
+      ['Inspect exterior paint for cracks, peeling or seepage', 'wall_paint'],
+      ['Test the outdoor socket and washing machine tap point', 'electrical'],
+    ]);
+  }
+  if (lower.includes('entrance') || lower.includes('passage')) {
+    return make([
+      ['Open and close the main door fully; check it does not scrape', 'doors_windows'],
+      ['Test the lock, latch, peephole and door stopper', 'doors_windows'],
+      ['Check the door frame and architrave for gaps and cracks', 'woodwork'],
+      ['Test the doorbell and passage lights', 'electrical'],
+    ]);
+  }
+  return make([
+    ['Shine a phone torch along walls to spot patches and waviness', 'wall_paint'],
+    ['Slide every window; check locks, tracks and glass sealant', 'doors_windows'],
+    ['Tap floor tiles with a coin to find hollow spots', 'flooring'],
+    ['Check door latch, lock and frame alignment', 'doors_windows'],
+    ['Test every switch and socket, including AC points', 'electrical'],
+  ]);
 }
 
-/**
- * Screen 3: Snag photo analysis using Gemini latest Flash model on Vertex AI.
- * Strict Guardrails:
- * 1. Photo analysis returns strict JSON: category, severity, description, location_note.
- * 2. category is one of: wall_paint, tiles, plumbing, electrical, doors_windows, woodwork, ceiling, flooring, other.
- * 3. severity is one of: minor, major, critical.
- * 4. If the photo shows no visible defect, return category "other" and say so in description.
- */
+// ---------------------------------------------------------------------------
+// Screen 3: snag photo analysis
+// ---------------------------------------------------------------------------
+
+const snagSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    category: { type: Type.STRING, enum: VALID_CATEGORIES },
+    severity: { type: Type.STRING, enum: VALID_SEVERITIES },
+    description: { type: Type.STRING, description: 'Clear technical description of the defect, 1-2 sentences' },
+    location_note: { type: Type.STRING, description: 'Where in the room / on the element the defect is' },
+    box_2d: {
+      type: Type.ARRAY,
+      nullable: true,
+      description: 'Bounding box of the main defect as [ymin, xmin, ymax, xmax] normalised 0-1000, or null',
+      items: { type: Type.INTEGER },
+    },
+  },
+  required: ['category', 'severity', 'description', 'location_note'],
+  propertyOrdering: ['category', 'severity', 'description', 'location_note', 'box_2d'],
+};
+
 export async function analyzeSnagPhoto(
   imageBuffer: Buffer,
   mimeType: string,
   roomContext: string
-): Promise<SnagAnalysisResult> {
-  const base64Data = imageBuffer.toString('base64');
+): Promise<AiResult<SnagAnalysisResult>> {
+  const prompt = `You are a civil engineer doing a possession-day snag inspection of an Indian apartment, room: "${roomContext}".
+Identify the single most important construction, finishing or MEP defect visible in this photo.
 
-  const prompt = `You are a forensic civil engineer inspecting flat possession snag defects for an Indian residential apartment in "${roomContext}".
-Examine this photo carefully and analyze any construction, civil, MEP, or architectural defect.
-
-CRITICAL RULES (MUST ADHERE STRICTLY):
-1. Return STRICT JSON with exact keys: "category", "severity", "description", "location_note".
-2. "category" MUST be exactly one of: "wall_paint", "tiles", "plumbing", "electrical", "doors_windows", "woodwork", "ceiling", "flooring", "other".
-3. "severity" MUST be exactly one of: "minor", "major", "critical".
-   - "critical": water seepage, electrical short/exposed wire, severe structural/glass crack, commode leak.
-   - "major": chipped tile, broken latch, improper slope causing pooling, unpainted patch, door jamming.
-   - "minor": paint hairline scratches, dirty grout line, minor switchboard smudge, slight finish blemish.
-4. If the photo shows no visible defect, return category "other" and say so in description (e.g., "No visible defect detected in inspected area").
-5. "location_note": provide a concise note identifying where the issue is situated (e.g., "Bottom corner near skirting", "Under washbasin pipe joint", "Window sill frame edge").
-
-JSON SCHEMA:
-{
-  "category": "wall_paint" | "tiles" | "plumbing" | "electrical" | "doors_windows" | "woodwork" | "ceiling" | "flooring" | "other",
-  "severity": "minor" | "major" | "critical",
-  "description": "Clear and technical description of defect",
-  "location_note": "Specific location in room"
-}
-
-Output ONLY the raw JSON string without markdown or backticks.`;
+Rules:
+1. category must be one of: ${VALID_CATEGORIES.join(', ')}.
+2. severity must be one of: minor, major, critical.
+   - critical: water seepage, exposed or sparking wiring, structural or glass crack, sewage/commode leak.
+   - major: chipped or hollow tile, broken latch, slope causing water pooling, unpainted patch, door jamming.
+   - minor: hairline paint scratch, dirty grout, smudges, small finish blemish.
+3. If there is no visible defect, return category "other", severity "minor", and say so in description.
+4. location_note: concise position, e.g. "Bottom left corner near skirting".
+5. box_2d: bounding box of the defect, [ymin, xmin, ymax, xmax] scaled 0-1000. null if no defect.`;
 
   try {
-    const raw = await callGemini(prompt, {
-      inlineData: {
-        data: base64Data,
-        mimeType: mimeType || 'image/jpeg',
-      },
+    const raw = await generate({
+      prompt,
+      image: { data: imageBuffer.toString('base64'), mimeType: mimeType || 'image/jpeg' },
+      schema: snagSchema,
     });
-
-    const cleaned = raw.replace(/```json/g, '').replace(/```/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-
-    let category = parsed.category;
-    if (!VALID_CATEGORIES.includes(category)) {
-      category = 'other';
-    }
-
-    let severity = parsed.severity;
-    if (!VALID_SEVERITIES.includes(severity)) {
-      severity = 'minor';
-    }
+    const parsed = parseJson<Partial<SnagAnalysisResult>>(raw);
+    const category = VALID_CATEGORIES.includes(parsed.category as SnagCategory)
+      ? (parsed.category as SnagCategory)
+      : 'other';
+    const severity = VALID_SEVERITIES.includes(parsed.severity as SnagSeverity)
+      ? (parsed.severity as SnagSeverity)
+      : 'minor';
+    const box =
+      Array.isArray(parsed.box_2d) &&
+      parsed.box_2d.length === 4 &&
+      parsed.box_2d.every((n) => typeof n === 'number' && n >= 0 && n <= 1000)
+        ? (parsed.box_2d as [number, number, number, number])
+        : null;
 
     return {
-      category: category as SnagCategory,
-      severity: severity as SnagSeverity,
-      description: String(parsed.description || 'Observed defect requiring rectification.'),
-      location_note: String(parsed.location_note || roomContext),
+      source: 'gemini',
+      data: {
+        category,
+        severity,
+        description: String(parsed.description || 'Observed defect requiring rectification.'),
+        location_note: String(parsed.location_note || roomContext),
+        box_2d: box,
+      },
     };
-  } catch (err: any) {
-    console.warn('Gemini vision analysis failed, returning compliant fallback:', err.message);
+  } catch {
     return {
-      category: 'other',
-      severity: 'minor',
-      description: 'Defect identified during visual room inspection. Please verify category and details.',
-      location_note: roomContext,
+      source: 'fallback',
+      data: {
+        category: 'other',
+        severity: 'minor',
+        description: 'AI analysis unavailable. Describe the defect and pick a category before saving.',
+        location_note: '',
+        box_2d: null,
+      },
     };
   }
 }
 
-/**
- * Screen 4: Gemini generates the builder snag letter from snags table.
- * Strict Snag Letter Guardrails:
- * 1. Formal, polite, firm tone, addressed to the builder.
- * 2. Group snags by room, list severity, reference the photo number.
- * 3. Request a fix timeline of 15 days and ask for written confirmation.
- * 4. Never invent defects that are not in the snags table.
- */
+// ---------------------------------------------------------------------------
+// Screen 4: builder snag letter
+// ---------------------------------------------------------------------------
+
+export interface LetterWalk {
+  buyer_name: string;
+  builder: string;
+  project: string;
+  tower: string;
+  flat_number: string;
+  bhk: string;
+  possession_date: string;
+}
+
+export interface LetterRoomGroup {
+  room_name: string;
+  snags: Array<{
+    photo_number: number;
+    category: string;
+    severity: string;
+    description: string;
+    location_note: string | null;
+  }>;
+}
+
+function formatDate(value: string | Date): string {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
 export async function generateSnagLetter(
-  walk: {
-    buyer_name: string;
-    builder: string;
-    project: string;
-    tower: string;
-    flat_number: string;
-    bhk: string;
-    possession_date: string;
-  },
-  snagsByRoom: Array<{
-    room_name: string;
-    snags: Array<{
-      photo_number: number;
-      category: string;
-      severity: string;
-      description: string;
-      location_note: string | null;
-      photo_url: string;
-    }>;
-  }>
-): Promise<string> {
-  const currentDate = new Date().toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
+  walk: LetterWalk,
+  snagsByRoom: LetterRoomGroup[]
+): Promise<AiResult<string>> {
+  const today = formatDate(new Date());
+  const rooms = snagsByRoom.filter((r) => r.snags.length > 0);
+  const total = rooms.reduce((n, r) => n + r.snags.length, 0);
 
-  const formattedSnagData = JSON.stringify(snagsByRoom, null, 2);
+  const prompt = `Draft a formal pre-possession snag notice from a home buyer to their builder in India.
 
-  const prompt = `You are a legal and civil engineering consultant drafting an official pre-possession snagging notice to a real estate developer.
+Buyer: ${walk.buyer_name}
+Builder: ${walk.builder}
+Project: ${walk.project}
+Unit: Flat ${walk.flat_number}, ${walk.tower} (${walk.bhk})
+Possession / inspection date: ${formatDate(walk.possession_date)}
+Date of letter: ${today}
 
-BUYER DETAILS:
-Buyer Name: ${walk.buyer_name}
-Builder / Developer: ${walk.builder}
-Project Name: ${walk.project}
-Tower / Wing: ${walk.tower}
-Flat Number: ${walk.flat_number}
-Apartment Type: ${walk.bhk}
-Scheduled Possession Date: ${walk.possession_date}
-Date of Notice: ${currentDate}
+Recorded defects (the ONLY defects that exist; ${total} in total):
+${JSON.stringify(rooms, null, 2)}
 
-OFFICIAL SNAG DATABASE RECORDS:
-${formattedSnagData}
-
-STRICT SNAG LETTER RULES (MANDATORY):
-1. Tone: Formal, polite, and firm tone, addressed to the builder (${walk.builder}).
-2. Group snags by room, list severity for each defect, and reference the corresponding photo number (e.g., "[Photo #1]").
-3. Explicitly request a fix timeline of exactly 15 days and ask for written confirmation of rectification prior to final handover / registration.
-4. CRITICAL RULE: NEVER invent defects that are not in the snags table. Ground every single defect strictly in the provided records. If there are no snags recorded for a room, do not fabricate any.
-5. Provide a well-structured letter with formal letterhead, subject line, reference to agreement, room-by-room breakdown table/bullets, closure, and buyer signature placeholder.
-
-Format output in clean, professional Markdown.`;
+Rules (mandatory):
+1. Formal, polite and firm tone, addressed to ${walk.builder}.
+2. Group defects by room using a "### Room name" heading per room. Under each, one bullet per defect:
+   "**[Photo #N]** Severity: MAJOR. Description. Location: ..."
+3. Request rectification of all items within 15 days of receipt, and written confirmation of completion
+   and a joint re-inspection before final handover and registration.
+4. Never invent, merge, or omit defects. Every photo number above appears exactly once. Do not add rooms that have no defects.
+5. Structure: date and addresses, a bold subject line, short opening paragraph, the room-by-room list,
+   the 15-day request, closing, and a signature block with the buyer's name.
+6. Output clean Markdown only. No code fences, no preamble, no notes to the user. Do not use em dashes.`;
 
   try {
-    const letter = await callGemini(prompt);
-    return letter.trim();
-  } catch (err: any) {
-    console.warn('Gemini snag letter generation fallback:', err.message);
-    return generateLocalFallbackLetter(walk, snagsByRoom, currentDate);
+    const letter = await generate({ prompt, temperature: 0.3 });
+    return { source: 'gemini', data: letter.replace(/^```(markdown)?/i, '').replace(/```$/, '').trim() };
+  } catch {
+    return { source: 'fallback', data: templateLetter(walk, rooms, today) };
   }
 }
 
-function generateLocalFallbackLetter(
-  walk: any,
-  snagsByRoom: any[],
-  currentDate: string
-): string {
-  let snagsText = '';
+function templateLetter(walk: LetterWalk, rooms: LetterRoomGroup[], today: string): string {
+  const list =
+    rooms.length === 0
+      ? '_No defects were recorded during this inspection._'
+      : rooms
+          .map((room) => {
+            const lines = room.snags.map((s) => {
+              const loc = s.location_note ? ` Location: ${s.location_note}.` : '';
+              return `- **[Photo #${s.photo_number}]** Severity: ${s.severity.toUpperCase()}. ${s.description}${loc}`;
+            });
+            return `### ${room.room_name}\n${lines.join('\n')}`;
+          })
+          .join('\n\n');
 
-  if (snagsByRoom.length === 0 || snagsByRoom.every((r) => r.snags.length === 0)) {
-    snagsText = '_No defects were logged during this inspection._';
-  } else {
-    for (const roomGroup of snagsByRoom) {
-      if (!roomGroup.snags || roomGroup.snags.length === 0) continue;
-      snagsText += `### ${roomGroup.room_name}\n`;
-      for (const s of roomGroup.snags) {
-        snagsText += `- **Photo #${s.photo_number}** | **Severity:** [${s.severity.toUpperCase()}] | **Category:** ${s.category}\n`;
-        snagsText += `  - **Defect:** ${s.description}\n`;
-        if (s.location_note) {
-          snagsText += `  - **Location:** ${s.location_note}\n`;
-        }
-      }
-      snagsText += '\n';
-    }
-  }
+  return `${today}
 
-  return `**Date:** ${currentDate}
+**To**
+The Project Head, ${walk.builder}
+${walk.project}
 
-**To:**  
-The Management & Project Execution Team  
-**${walk.builder}**  
-Project: **${walk.project}**
+**From**
+${walk.buyer_name}
+Flat ${walk.flat_number}, ${walk.tower} (${walk.bhk})
 
-**From:**  
-**${walk.buyer_name}**  
-Unit: Flat No. **${walk.flat_number}**, Tower **${walk.tower}** (${walk.bhk})  
-Proposed Possession Date: ${walk.possession_date}
+**Subject: Pre-possession inspection of Flat ${walk.flat_number}, ${walk.tower}: request to rectify defects**
 
----
+Dear Sir or Madam,
 
-### **SUBJECT: Official Pre-Possession Inspection Snag List & Rectification Notice**
+I inspected Flat ${walk.flat_number}, ${walk.tower} at ${walk.project} on ${formatDate(walk.possession_date)}. The defects listed below were observed and must be rectified before I take possession. Each item references the photograph attached in the annexure.
 
-Dear Sir/Madam,
+${list}
 
-I am writing regarding the joint pre-possession flat inspection conducted for Flat No. **${walk.flat_number}**, Tower **${walk.tower}** at **${walk.project}**.
+I request that all the above items be rectified within **15 days** of receipt of this letter. Please confirm completion in writing and propose a date for a joint re-inspection before final handover and registration.
 
-While looking forward to taking handover of the unit, our detailed walk-through inspection identified several civil, finishing, and MEP issues that require immediate rectification prior to final handover and execution of the possession protocol.
-
-The itemized defect list, grouped by room along with severity classifications and referenced photographic evidence, is detailed below:
-
-${snagsText}
-
-### **Rectification Timeline & Confirmation Request**
-
-In accordance with good industry standards and our agreement terms, I formally request that all items listed above be rectified completely within **15 days** from the receipt of this notice.
-
-Kindly provide a **written confirmation** along with the schedule of rectification work and confirm a mutual re-inspection date once the snags are resolved.
-
-Thank you for your prompt cooperation in ensuring quality standards for our home.
+Thank you for your cooperation.
 
 Yours faithfully,
 
-**${walk.buyer_name}**  
-Allottee / Home Buyer  
-Flat No. ${walk.flat_number}, Tower ${walk.tower}, ${walk.project}`;
+**${walk.buyer_name}**
+Flat ${walk.flat_number}, ${walk.tower}, ${walk.project}`;
 }

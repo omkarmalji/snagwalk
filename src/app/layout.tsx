@@ -1,30 +1,30 @@
 import type { Metadata, Viewport } from 'next';
+import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 
+const geist = Geist({ subsets: ['latin'], variable: '--font-geist', display: 'swap' });
+const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
+
 export const metadata: Metadata = {
-  title: 'SnagWalk - Possession Snagging Assistant',
-  description: 'AI-Powered Flat Possession Inspection and Builder Snag Letter Assistant',
+  title: 'SnagWalk - Possession day snag inspection',
+  description:
+    'Walk your new flat room by room, photograph defects, let Gemini classify them, and send your builder a formal snag letter.',
 };
 
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  viewportFit: 'cover',
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#f4f4f1' },
+    { media: '(prefers-color-scheme: dark)', color: '#0d0d0f' },
+  ],
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="bg-slate-100 text-slate-900 antialiased min-h-screen">
-        <main className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col shadow-xl border-x border-slate-200">
-          {children}
-        </main>
-      </body>
+    <html lang="en-IN" className={`${geist.variable} ${geistMono.variable}`}>
+      <body className="min-h-[100dvh] overflow-x-hidden">{children}</body>
     </html>
   );
 }

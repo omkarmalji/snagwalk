@@ -1,25 +1,26 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import Header from '@/components/Header';
-import { SeverityBadge, CategoryBadge } from '@/components/Badge';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useParams } from 'next/navigation';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
-  Download,
-  Copy,
-  Sparkles,
-  RefreshCw,
+  ArrowClockwise,
   Check,
-  FileText,
-  Clock,
-  AlertTriangle,
-  ArrowLeft,
-  Share2,
-} from 'lucide-react';
+  Copy,
+  DownloadSimple,
+  ShareNetwork,
+  Sparkle,
+  WarningCircle,
+} from '@phosphor-icons/react';
+import AppHeader from '@/components/AppHeader';
+import { Button, Card, SeverityBadge, Skeleton, SourceTag, cn } from '@/components/ui';
+import { api, formatDate, toWhatsAppText } from '@/lib/client';
+import { gsap, useGSAP, useReveal, prefersReducedMotion, EASE } from '@/lib/motion';
+import { categoryLabel, photoSrc } from '@/lib/shared';
 
 interface Snag {
   id: string;
-  room_id: string;
   room_name: string;
   category: string;
   severity: string;
@@ -29,310 +30,361 @@ interface Snag {
   photo_number: number;
 }
 
-export default function SnagLetterPage() {
-  const params = useParams();
-  const router = useRouter();
-  const walkId = params.walkId as string;
+interface Walk {
+  buyer_name: string;
+  builder: string;
+  project: string;
+  tower: string;
+  flat_number: string;
+  possession_date: string;
+}
 
-  const letterContainerRef = useRef<HTMLDivElement>(null);
+interface LetterResponse {
+  walk: Walk;
+  snags: Snag[];
+  letter: string | null;
+  source: 'gemini' | 'fallback' | null;
+  stale: boolean;
+}
 
-  const [loading, setLoading] = useState(true);
+const md: Components = {
+  h1: (p) => <h3 className="mb-3 mt-7 text-[17px] font-semibold tracking-tight" {...p} />,
+  h2: (p) => <h3 className="mb-3 mt-7 text-[17px] font-semibold tracking-tight" {...p} />,
+  h3: (p) => (
+    <h4 className="mb-2 mt-6 border-b border-line pb-1.5 text-[15px] font-semibold tracking-tight" {...p} />
+  ),
+  h4: (p) => <h5 className="mb-2 mt-5 text-[14px] font-semibold" {...p} />,
+  p: (p) => <p className="my-3 text-[14.5px] leading-[1.7]" {...p} />,
+  ul: (p) => <ul className="my-3 space-y-2 pl-0" {...p} />,
+  ol: (p) => <ol className="my-3 list-decimal space-y-2 pl-5" {...p} />,
+  li: (p) => (
+    <li className="relative pl-4 text-[14.5px] leading-[1.65] before:absolute before:left-0 before:top-[0.7em] before:size-1 before:rounded-full before:bg-ink-3" {...p} />
+  ),
+  strong: (p) => <strong className="font-semibold text-ink" {...p} />,
+  hr: () => <hr className="my-6 border-line" />,
+  table: (p) => (
+    <div className="my-4 overflow-x-auto">
+      <table className="w-full border-collapse text-[13.5px]" {...p} />
+    </div>
+  ),
+  th: (p) => <th className="border-b border-line px-2 py-2 text-left font-semibold" {...p} />,
+  td: (p) => <td className="border-b border-line px-2 py-2 align-top" {...p} />,
+};
+
+export default function LetterPage() {
+  const { walkId } = useParams<{ walkId: string }>();
+  const scope = useRef<HTMLDivElement>(null);
+  const paperRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const started = useRef(false);
+
+  const [data, setData] = useState<LetterResponse | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const [walk, setWalk] = useState<any>(null);
-  const [snags, setSnags] = useState<Snag[]>([]);
-  const [letterContent, setLetterContent] = useState<string>('');
-
-  useEffect(() => {
-    fetchDataAndGenerate();
-  }, [walkId]);
-
-  async function fetchDataAndGenerate() {
-    setLoading(true);
-    try {
-      // 1. Fetch walk info and all snags from the snags table
-      const res = await fetch(`/api/walks/${walkId}/snags`);
-      const data = await res.json();
-      setSnags(data.all_snags || []);
-
-      const walkRes = await fetch(`/api/walks/${walkId}`);
-      const walkData = await walkRes.json();
-      setWalk(walkData.walk);
-
-      // 2. Load existing letter from walks table or generate via Gemini
-      if (walkData.walk?.letter_text) {
-        setLetterContent(walkData.walk.letter_text);
-      } else {
-        await triggerLetterGeneration();
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function triggerLetterGeneration() {
+  const generate = useCallback(async () => {
     setGenerating(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/walks/${walkId}/letter`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to generate letter');
-      setLetterContent(data.letter);
-    } catch (e: any) {
-      console.error(e);
-      setLetterContent('Error generating snag letter from Gemini. Please try again.');
+      setData(await api<LetterResponse>(`/api/walks/${walkId}/letter`, { method: 'POST' }));
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setGenerating(false);
     }
-  }
+  }, [walkId]);
 
-  function handleCopyText() {
-    if (!letterContent) return;
-    navigator.clipboard.writeText(letterContent);
+  useEffect(() => {
+    if (started.current) return; // StrictMode runs effects twice in dev; generate once.
+    started.current = true;
+    api<LetterResponse>(`/api/walks/${walkId}/letter`)
+      .then((d) => {
+        setData(d);
+        if (!d.letter || d.stale) generate();
+      })
+      .catch((e) => setError((e as Error).message));
+  }, [walkId, generate]);
+
+  useReveal(scope, [Boolean(data)]);
+
+  // Storytelling: the letter assembles block by block once Gemini returns it.
+  useGSAP(
+    () => {
+      if (generating || !data?.letter || !bodyRef.current || prefersReducedMotion()) return;
+      gsap.fromTo(
+        bodyRef.current.children,
+        { autoAlpha: 0, y: 8 },
+        { autoAlpha: 1, y: 0, duration: 0.5, ease: EASE, stagger: 0.035 }
+      );
+    },
+    { dependencies: [generating, data?.letter], scope: bodyRef }
+  );
+
+  const snags = data?.snags ?? [];
+  const counts = {
+    critical: snags.filter((s) => s.severity === 'critical').length,
+    major: snags.filter((s) => s.severity === 'major').length,
+    minor: snags.filter((s) => s.severity === 'minor').length,
+  };
+  const ready = Boolean(data?.letter) && !generating;
+
+  async function copy() {
+    if (!data?.letter) return;
+    await navigator.clipboard.writeText(toWhatsAppText(data.letter));
     setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    setTimeout(() => setCopied(false), 2000);
   }
 
-  async function handleDownloadPdf() {
-    if (!letterContainerRef.current) return;
+  async function share() {
+    if (!data?.letter) return;
+    const text = toWhatsAppText(data.letter);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: `Snag notice, Flat ${data.walk.flat_number}`, text });
+        return;
+      } catch {
+        // cancelled
+      }
+    }
+    window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+  }
+
+  async function downloadPdf() {
+    if (!paperRef.current || !data) return;
     setDownloading(true);
-
     try {
-      // Dynamic import of jspdf and html2canvas for browser client-side generation
-      const html2canvas = (await import('html2canvas')).default;
-      const { jsPDF } = await import('jspdf');
-
-      const element = letterContainerRef.current;
-      const canvas = await html2canvas(element, {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
+      const canvas = await html2canvas(paperRef.current, {
         scale: 2,
         useCORS: true,
+        backgroundColor: '#fffffd',
         logging: false,
-        backgroundColor: '#ffffff',
+        // Lay the document out at A4 width whatever the device, so a phone and a laptop produce the same PDF.
+        windowWidth: 1024,
+        onclone: (_doc, el) => {
+          Object.assign(el.style, { width: '794px', padding: '64px 72px', borderRadius: '0', boxShadow: 'none' });
+        },
       });
-
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const pxPerMm = canvas.width / pageW;
+      const pagePx = Math.floor(pageH * pxPerMm);
 
-      let position = 0;
-      let heightLeft = pdfHeight;
-      const pageHeight = pdf.internal.pageSize.getHeight();
-
-      pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
-      heightLeft -= pageHeight;
-
-      while (heightLeft > 0) {
-        position = heightLeft - pdfHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 0, position, pdfWidth, pdfHeight);
-        heightLeft -= pageHeight;
+      // Slice the tall canvas into A4 pages instead of shifting one huge image.
+      for (let y = 0, page = 0; y < canvas.height; y += pagePx, page++) {
+        const slice = document.createElement('canvas');
+        slice.width = canvas.width;
+        slice.height = Math.min(pagePx, canvas.height - y);
+        slice.getContext('2d')!.drawImage(canvas, 0, y, canvas.width, slice.height, 0, 0, canvas.width, slice.height);
+        if (page > 0) pdf.addPage();
+        pdf.addImage(slice.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 0, pageW, slice.height / pxPerMm);
       }
-
-      const flatName = walk ? `Flat_${walk.flat_number}_${walk.tower}` : 'SnagList';
-      pdf.save(`SnagWalk_Notice_${flatName}.pdf`);
+      pdf.save(`Snag-notice-Flat-${data.walk.flat_number}-${data.walk.tower}.pdf`.replace(/\s+/g, '-'));
     } catch (err) {
-      console.error('PDF generation error, opening browser print window:', err);
+      console.error('PDF export failed, using print dialog:', err);
       window.print();
     } finally {
       setDownloading(false);
     }
   }
 
-  const criticalCount = snags.filter((s) => s.severity === 'critical').length;
-  const majorCount = snags.filter((s) => s.severity === 'major').length;
-  const minorCount = snags.filter((s) => s.severity === 'minor').length;
-
   return (
-    <div className="flex flex-col flex-1 pb-28">
-      <Header
-        title="Builder Snag Letter"
-        backHref={`/walks/${walkId}`}
-        subtitle={walk ? `Flat ${walk.flat_number} • ${walk.builder}` : ''}
-      />
+    <div ref={scope} className="min-h-[100dvh]">
+      <AppHeader back={{ href: `/walks/${walkId}`, label: 'Rooms' }} title="Builder letter" />
 
-      {/* Top Banner & 15-Day Notice Badge */}
-      <div className="bg-slate-900 text-white p-4 shadow-sm space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <span className="text-xs text-slate-400">Formal Rectification Notice</span>
-            <h2 className="text-base font-bold text-white">
-              {walk?.builder || 'Builder'} • {walk?.project || 'Project'}
-            </h2>
-          </div>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/20 text-emerald-300 text-xs font-bold border border-emerald-500/30">
-            <Clock className="w-3.5 h-3.5 text-emerald-400" />
-            <span>15-Day Fix Timeline</span>
-          </div>
-        </div>
-
-        {/* Severity Metrics Bar */}
-        <div className="grid grid-cols-4 gap-2 pt-1 text-center">
-          <div className="bg-slate-800 p-2 rounded-xl border border-slate-700">
-            <div className="text-base font-bold text-white">{snags.length}</div>
-            <div className="text-[10px] text-slate-400">Total Defects</div>
-          </div>
-          <div className="bg-rose-950/50 p-2 rounded-xl border border-rose-800/40">
-            <div className="text-base font-bold text-rose-400">{criticalCount}</div>
-            <div className="text-[10px] text-rose-300">Critical</div>
-          </div>
-          <div className="bg-amber-950/50 p-2 rounded-xl border border-amber-800/40">
-            <div className="text-base font-bold text-amber-400">{majorCount}</div>
-            <div className="text-[10px] text-amber-300">Major</div>
-          </div>
-          <div className="bg-emerald-950/50 p-2 rounded-xl border border-emerald-800/40">
-            <div className="text-base font-bold text-emerald-400">{minorCount}</div>
-            <div className="text-[10px] text-emerald-300">Minor</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="p-4 space-y-4">
-        {/* Quick Actions (Regenerate / Copy) */}
-        <div className="flex items-center justify-between gap-2">
-          <button
-            type="button"
-            disabled={generating}
-            onClick={triggerLetterGeneration}
-            className="flex-1 h-11 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-700 flex items-center justify-center gap-1.5 shadow-sm active:bg-slate-100 transition"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${generating ? 'animate-spin text-emerald-600' : ''}`} />
-            <span>Regenerate Letter</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleCopyText}
-            className="flex-1 h-11 bg-white hover:bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-700 flex items-center justify-center gap-1.5 shadow-sm active:bg-slate-100 transition"
-          >
-            {copied ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-600" />
-                <span className="text-emerald-700 font-bold">Copied!</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5 text-slate-600" />
-                <span>Copy Text</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Printable/Exportable Letter Document */}
-        <div
-          ref={letterContainerRef}
-          className="bg-white rounded-2xl p-5 border border-slate-200 shadow-md text-slate-900 space-y-4"
-        >
-          {generating ? (
-            <div className="py-12 text-center text-slate-500 space-y-3">
-              <Sparkles className="w-8 h-8 text-emerald-600 mx-auto animate-pulse" />
-              <p className="text-sm font-semibold text-slate-800">
-                Gemini on Vertex AI is drafting the formal snag letter...
-              </p>
-              <p className="text-xs text-slate-500 max-w-xs mx-auto">
-                Strictly enforcing tone, grouping defects by room, referencing photos, and mandating a 15-day timeline.
-              </p>
-            </div>
-          ) : (
-            <div className="prose prose-sm max-w-none text-xs leading-relaxed space-y-3">
-              {/* Formatted Markdown Display */}
-              <div className="whitespace-pre-wrap font-sans text-slate-800 text-xs leading-relaxed bg-slate-50/50 p-3 rounded-xl border border-slate-100">
-                {letterContent}
-              </div>
-            </div>
-          )}
-
-          {/* Photographic Evidence Attachment Section (Referenced in Letter) */}
-          {snags.length > 0 && !generating && (
-            <div className="pt-4 border-t border-slate-200 space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                  Photographic Evidence Annexure ({snags.length} Photos)
-                </h4>
-                <span className="text-[10px] text-slate-500 font-mono">
-                  gs://snagwalk-photos-515212
-                </span>
+      <main className="mx-auto max-w-6xl px-4 pb-32 pt-6 sm:px-6 lg:pb-20 lg:pt-10">
+        <div className="grid gap-8 lg:grid-cols-12 lg:gap-12">
+          <aside className="no-print min-w-0 lg:order-2 lg:col-span-4">
+            <div className="lg:sticky lg:top-24">
+              <div data-reveal>
+                <h1 className="text-[30px] font-semibold tracking-[-0.03em] sm:text-[36px]">Builder letter</h1>
+                <p className="mt-1 text-[15px] text-ink-2">
+                  {data ? `To ${data.walk.builder}. Asks for every defect to be fixed within 15 days.` : ' '}
+                </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                {snags.map((snag) => (
-                  <div
-                    key={snag.id}
-                    className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm flex flex-col"
-                  >
-                    <div className="relative aspect-square bg-slate-100">
-                      <img
-                        src={snag.photo_url}
-                        alt={`Photo #${snag.photo_number}`}
-                        className="w-full h-full object-cover"
-                      />
-                      <span className="absolute top-1.5 left-1.5 px-2 py-0.5 rounded text-[10px] font-bold bg-slate-900/80 text-white shadow">
-                        Photo #{snag.photo_number}
+              <Card data-reveal className="mt-6 grid grid-cols-4 divide-x divide-line">
+                <Count label="Total" value={snags.length} />
+                <Count label="Critical" value={counts.critical} tone="text-crit" />
+                <Count label="Major" value={counts.major} tone="text-major" />
+                <Count label="Minor" value={counts.minor} tone="text-ink-2" />
+              </Card>
+
+              <div data-reveal className="mt-4 hidden flex-col gap-2 lg:flex">
+                <Button size="lg" onClick={downloadPdf} loading={downloading} disabled={!ready} className="w-full">
+                  {!downloading && <DownloadSimple className="size-5" weight="bold" />}
+                  Download PDF
+                </Button>
+                <SecondaryActions ready={ready} copied={copied} generating={generating} onShare={share} onCopy={copy} onRegenerate={generate} />
+              </div>
+
+              <div data-reveal className="mt-4 flex items-center gap-2 text-[13px] text-ink-2">
+                {generating ? (
+                  <span>Drafting from {snags.length} recorded snags</span>
+                ) : (
+                  data?.source && (
+                    <>
+                      <SourceTag source={data.source} />
+                      <span>
+                        {data.source === 'gemini' ? 'Written from your recorded snags only' : 'Gemini unavailable, standard template used'}
                       </span>
-                    </div>
-                    <div className="p-2 space-y-1">
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-[10px] font-bold text-slate-800 truncate">
-                          {snag.room_name}
-                        </span>
-                        <SeverityBadge severity={snag.severity} />
-                      </div>
-                      <p className="text-[11px] text-slate-700 line-clamp-2 leading-tight">
-                        {snag.description}
-                      </p>
-                      {snag.location_note && (
-                        <p className="text-[10px] text-slate-500 truncate">
-                          📍 {snag.location_note}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                    </>
+                  )
+                )}
+              </div>
+
+              <div className="mt-4 lg:hidden">
+                <SecondaryActions ready={ready} copied={copied} generating={generating} onShare={share} onCopy={copy} onRegenerate={generate} />
               </div>
             </div>
-          )}
-        </div>
+          </aside>
 
-        {/* Back Link */}
-        <div className="text-center pt-2">
-          <button
-            type="button"
-            onClick={() => router.push(`/walks/${walkId}`)}
-            className="text-xs font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Return to Room Walk</span>
-          </button>
+          <section className="min-w-0 lg:order-1 lg:col-span-8">
+            {error && (
+              <div className="mb-4 flex items-start gap-3 rounded-card bg-crit-soft p-4 text-crit">
+                <WarningCircle className="mt-0.5 size-5 shrink-0" weight="fill" />
+                <div className="flex-1 text-[14px]">
+                  <p className="font-medium">{error}</p>
+                  <button type="button" onClick={generate} className="mt-1 font-semibold underline underline-offset-2">
+                    Try again
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <article
+              ref={paperRef}
+              data-reveal
+              className="paper rounded-[6px] px-6 py-8 shadow-paper ring-1 ring-black/5 sm:px-12 sm:py-12"
+            >
+              {!ready ? (
+                <PaperSkeleton count={snags.length} generating={generating || !data} />
+              ) : (
+                <>
+                  <div ref={bodyRef} className="text-ink">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={md}>
+                      {data!.letter!}
+                    </ReactMarkdown>
+                  </div>
+
+                  {snags.length > 0 && (
+                    <section className="mt-10 border-t-2 border-ink pt-6">
+                      <h3 className="text-[15px] font-semibold tracking-tight">Annexure: photographs</h3>
+                      <p className="mt-1 text-[13px] text-ink-2">
+                        Flat {data!.walk.flat_number}, {data!.walk.tower}, {data!.walk.project}. Inspected{' '}
+                        {formatDate(data!.walk.possession_date)}.
+                      </p>
+                      <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-3">
+                        {snags.map((s) => (
+                          <figure key={s.id} className="break-inside-avoid">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={photoSrc(s.photo_url)}
+                              alt={`Photo ${s.photo_number}: ${s.description}`}
+                              crossOrigin="anonymous"
+                              className="aspect-[4/3] w-full rounded-[4px] bg-surface-2 object-cover"
+                            />
+                            <figcaption className="mt-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[13px] font-semibold">Photo #{s.photo_number}</span>
+                                <SeverityBadge severity={s.severity} className="h-5 px-2 text-[11px]" />
+                              </div>
+                              <p className="mt-0.5 text-[12px] text-ink-2">
+                                {s.room_name}, {categoryLabel(s.category).toLowerCase()}
+                              </p>
+                            </figcaption>
+                          </figure>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  <p className="mt-10 text-[11px] text-ink-3">Prepared with SnagWalk on {formatDate(new Date().toISOString())}.</p>
+                </>
+              )}
+            </article>
+          </section>
         </div>
+      </main>
+
+      <div className="no-print fixed inset-x-0 bottom-0 z-40 border-t border-line bg-bg/90 px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl lg:hidden">
+        <Button size="lg" onClick={downloadPdf} loading={downloading} disabled={!ready} className="w-full">
+          {!downloading && <DownloadSimple className="size-5" weight="bold" />}
+          Download PDF
+        </Button>
       </div>
+    </div>
+  );
+}
 
-      {/* STICKY BOTTOM PRIMARY ACTION: DOWNLOAD PDF (Requirement 4 & Mobile-First Rule) */}
-      <div className="fixed bottom-0 left-0 right-0 max-w-md mx-auto p-3 bg-white/95 backdrop-blur-md border-t border-slate-200 shadow-xl z-20">
-        <button
-          type="button"
-          disabled={downloading || generating}
-          onClick={handleDownloadPdf}
-          className="w-full h-14 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-xl font-bold text-base shadow-lg shadow-emerald-700/20 flex items-center justify-center gap-2 transition disabled:opacity-50"
-        >
-          {downloading ? (
-            <span className="inline-flex items-center gap-2">
-              <svg className="animate-spin h-5 w-5 text-white" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-              </svg>
-              Preparing PDF Document...
-            </span>
-          ) : (
-            <>
-              <Download className="w-5 h-5" />
-              <span>Download Official Snag Letter (PDF)</span>
-            </>
-          )}
-        </button>
+function Count({ label, value, tone }: { label: string; value: number; tone?: string }) {
+  return (
+    <div className="px-3 py-4 text-center">
+      <p className={cn('tabular text-[24px] font-semibold leading-none tracking-tight', tone)}>{value}</p>
+      <p className="mt-1.5 text-[12px] text-ink-3">{label}</p>
+    </div>
+  );
+}
+
+function SecondaryActions({
+  ready,
+  copied,
+  generating,
+  onShare,
+  onCopy,
+  onRegenerate,
+}: {
+  ready: boolean;
+  copied: boolean;
+  generating: boolean;
+  onShare: () => void;
+  onCopy: () => void;
+  onRegenerate: () => void;
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      <Button variant="secondary" onClick={onShare} disabled={!ready} className="px-2">
+        <ShareNetwork className="size-[18px]" />
+        Share
+      </Button>
+      <Button variant="secondary" onClick={onCopy} disabled={!ready} className="px-2">
+        {copied ? <Check className="size-[18px] text-ok" weight="bold" /> : <Copy className="size-[18px]" />}
+        {copied ? 'Copied' : 'Copy'}
+      </Button>
+      <Button variant="secondary" onClick={onRegenerate} disabled={generating} className="px-2">
+        <ArrowClockwise className={cn('size-[18px]', generating && 'animate-spin')} />
+        Redo
+      </Button>
+    </div>
+  );
+}
+
+function PaperSkeleton({ count, generating }: { count: number; generating: boolean }) {
+  return (
+    <div aria-label="Drafting letter">
+      {generating && (
+        <p className="mb-6 flex items-center gap-2 text-[14px] font-medium text-ink-2">
+          <Sparkle className="size-4 animate-pulse text-[rgb(46_76_214)]" weight="fill" />
+          Gemini is drafting your letter{count ? ` from ${count} ${count === 1 ? 'snag' : 'snags'}` : ''}
+        </p>
+      )}
+      <Skeleton className="h-3 w-28" />
+      <Skeleton className="mt-6 h-3 w-48" />
+      <Skeleton className="mt-2 h-3 w-40" />
+      <Skeleton className="mt-8 h-4 w-3/4" />
+      <div className="mt-6 space-y-2.5">
+        {Array.from({ length: 4 }, (_, i) => (
+          <Skeleton key={i} className={cn('h-3', i === 3 ? 'w-2/3' : 'w-full')} />
+        ))}
+      </div>
+      <Skeleton className="mt-8 h-3.5 w-36" />
+      <div className="mt-4 space-y-2.5">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Skeleton key={i} className={cn('h-3', i === 2 ? 'w-1/2' : 'w-11/12')} />
+        ))}
       </div>
     </div>
   );

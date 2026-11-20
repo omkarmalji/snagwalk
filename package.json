@@ -13,6 +13,7 @@
     "release:hosting": "node scripts/release-hosting.mjs"
   },
   "dependencies": {
+    "@google-cloud/firestore": "^9.4.1",
     "@google-cloud/storage": "^7.15.2",
     "@google/genai": "3.6.1",
     "@gsap/react": "2.1.2",
@@ -23,7 +24,6 @@
     "html2canvas": "^1.4.1",
     "jspdf": "^2.5.2",
     "next": "^15.1.0",
-    "pg": "^8.13.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "10.1.0",
@@ -33,7 +33,6 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.7",
     "@types/node": "^22.10.2",
-    "@types/pg": "^8.11.10",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.2",
     "autoprefixer": "^10.4.20",

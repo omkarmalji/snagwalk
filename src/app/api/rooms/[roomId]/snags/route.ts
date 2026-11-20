@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/lib/db';
+import { getStore } from '@/lib/store';
 import { uploadPhotoToGcs } from '@/lib/gcs';
 import { analyzeSnagPhoto } from '@/lib/gemini';
 import { isUuid } from '@/lib/walks';
@@ -13,13 +13,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
   try {
     const { roomId } = await params;
     if (!isUuid(roomId)) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
-    const res = await query(
-      `SELECT id, walk_id, room_id, category, severity, description, location_note, photo_url, created_at
-       FROM snags WHERE room_id = $1
-       ORDER BY created_at ASC`,
-      [roomId]
-    );
-    return NextResponse.json({ snags: res.rows });
+    return NextResponse.json({ snags: await getStore().listSnagsByRoom(roomId) });
   } catch (error) {
     console.error('[api/rooms/:id/snags] GET failed:', error);
     return NextResponse.json({ error: 'Could not load snags.' }, { status: 500 });
@@ -28,20 +22,15 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
 
 /**
  * Snag capture: store the photo in Cloud Storage, analyse it with Gemini, save the JSON result to the
- * snags table, and return it so the buyer can review and edit (or discard) it.
+ * store, and return it so the buyer can review and edit (or discard) it.
  */
 export async function POST(request: NextRequest, { params }: Ctx) {
   try {
     const { roomId } = await params;
     if (!isUuid(roomId)) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
 
-    const roomRes = await query(
-      `SELECT r.id, r.walk_id, r.room_type, r.status, r.checklist, w.bhk, w.project_name
-       FROM rooms r JOIN walks w ON r.walk_id = w.id
-       WHERE r.id = $1`,
-      [roomId]
-    );
-    const room = roomRes.rows[0];
+    const store = getStore();
+    const room = await store.getRoom(roomId);
     if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
 
     const form = await request.formData();
@@ -65,23 +54,18 @@ export async function POST(request: NextRequest, { params }: Ctx) {
       analyzeSnagPhoto(buffer, mimeType, room.room_type),
     ]);
 
-    const insert = await query(
-      `INSERT INTO snags (walk_id, room_id, category, severity, description, location_note, photo_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, walk_id, room_id, category, severity, description, location_note, photo_url, created_at`,
-      [
-        room.walk_id,
-        roomId,
-        analysis.data.category,
-        analysis.data.severity,
-        analysis.data.description,
-        analysis.data.location_note || null,
-        photoUrl,
-      ]
-    );
+    const snag = await store.createSnag({
+      walk_id: room.walk_id,
+      room_id: roomId,
+      category: analysis.data.category,
+      severity: analysis.data.severity,
+      description: analysis.data.description,
+      location_note: analysis.data.location_note || null,
+      photo_url: photoUrl,
+    });
 
     return NextResponse.json(
-      { snag: insert.rows[0], box_2d: analysis.data.box_2d ?? null, source: analysis.source },
+      { snag, box_2d: analysis.data.box_2d ?? null, source: analysis.source },
       { status: 201 }
     );
   } catch (error) {

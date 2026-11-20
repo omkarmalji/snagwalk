@@ -36,9 +36,9 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=8080
 ENV HOSTNAME="0.0.0.0"
-# Production never falls back to the local JSON store or local disk; set DB_*, GCS_BUCKET_NAME and
-# GOOGLE_CLOUD_PROJECT on the Cloud Run service. Gemini uses the service account (GEMINI_AUTH=adc).
-ENV DB_FALLBACK=off
+# Production uses Firestore and Cloud Storage, never the local JSON store or local disk. Firestore, Cloud
+# Storage and Gemini all authenticate as the Cloud Run service account (no passwords or keys).
+ENV DATA_STORE=firestore
 ENV STORAGE_FALLBACK=off
 ENV GEMINI_AUTH=adc
 

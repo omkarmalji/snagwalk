@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/lib/db';
+import { getStore } from '@/lib/store';
 import { defaultRoomsFor, parseBhk } from '@/lib/shared';
-import { isUuid, serializeWalk, type WalkRow } from '@/lib/walks';
+import { isUuid, serializeWalk } from '@/lib/walks';
 
 const MAX_LEN = 120;
 
@@ -29,24 +29,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Please fill in every field.', fields: missing }, { status: 400 });
     }
 
-    // Guardrail: parameterized SQL only.
-    const walkRes = await query<WalkRow>(
-      `INSERT INTO walks (buyer_name, builder_name, project_name, tower, flat_number, bhk, possession_date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, buyer_name, builder_name, project_name, tower, flat_number, bhk, possession_date, letter_text, created_at`,
-      [buyer_name, builder, project, tower, flat_number, bhk, possession_date]
+    // One atomic write: the walk and every room provisioned for its BHK.
+    const walk = await getStore().createWalk(
+      { buyer_name, builder_name: builder, project_name: project, tower, flat_number, bhk, possession_date },
+      defaultRoomsFor(bhk)
     );
-    const walk = walkRes.rows[0];
-    if (!walk) throw new Error('Failed to create walk');
-
-    for (const roomType of defaultRoomsFor(bhk)) {
-      await query(
-        `INSERT INTO rooms (walk_id, room_type, status, checklist)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, walk_id, room_type, status, checklist, created_at`,
-        [walk.id, roomType, 'pending', JSON.stringify([])]
-      );
-    }
 
     return NextResponse.json({ walk: serializeWalk(walk) }, { status: 201 });
   } catch (error) {
@@ -68,19 +55,10 @@ export async function GET(request: NextRequest) {
       .slice(0, 20);
     if (ids.length === 0) return NextResponse.json({ walks: [] });
 
-    const res = await query<WalkRow>(
-      `SELECT id, buyer_name, builder_name, project_name, tower, flat_number, bhk, possession_date, letter_text, created_at
-       FROM walks WHERE id = ANY($1::uuid[])
-       ORDER BY created_at DESC`,
-      [ids]
-    );
-    const counts = await Promise.all(
-      res.rows.map((w) => query(`SELECT room_id, count(*)::int AS snag_count FROM snags WHERE walk_id = $1 GROUP BY room_id`, [w.id]))
-    );
-    const walks = res.rows.map((w, i) => ({
-      ...serializeWalk(w),
-      snag_count: counts[i].rows.reduce((n, r) => n + Number(r.snag_count), 0),
-    }));
+    const store = getStore();
+    const rows = await store.getWalks(ids);
+    const snagLists = await Promise.all(rows.map((w) => store.listSnagsByWalk(w.id)));
+    const walks = rows.map((w, i) => ({ ...serializeWalk(w), snag_count: snagLists[i].length }));
     return NextResponse.json({ walks });
   } catch (error) {
     console.error('[api/walks] list failed:', error);

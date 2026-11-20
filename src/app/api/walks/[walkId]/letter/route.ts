@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/lib/db';
+import { getStore } from '@/lib/store';
 import { generateSnagLetter } from '@/lib/gemini';
 import { parseLetterLanguage } from '@/lib/shared';
 import {
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest, { params }: Ctx) {
     const { data: markdown, source } = await generateSnagLetter(toLetterWalk(found.walk), groups, language);
     const fp = letterFingerprint(found.walk, groups);
 
-    await query(`UPDATE walks SET letter_text = $1 WHERE id = $2`, [packLetter(markdown, fp, source, language), walkId]);
+    await getStore().setLetter(walkId, packLetter(markdown, fp, source, language));
 
     return NextResponse.json({ walk: found.walk, snags, letter: markdown, source, language, stale: false });
   } catch (error) {

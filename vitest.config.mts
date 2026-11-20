@@ -8,7 +8,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
-    // Unit tests never touch AlloyDB, Cloud Storage or Gemini.
-    env: { DB_FALLBACK: 'off', ALLOYDB_INSTANCE_URI: '', DB_HOST: '' },
+    // Unit tests never touch Firestore, Cloud Storage or Gemini.
+    env: { DATA_STORE: 'local' },
   },
 });

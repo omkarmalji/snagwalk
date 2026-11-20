@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { query } from '@/lib/db';
+import { getStore, type RoomDoc, type SnagDoc } from '@/lib/store';
 import type { AiSource, LetterRoomGroup, LetterWalk } from '@/lib/gemini';
 import type { LetterLanguage } from '@/lib/shared';
 
@@ -59,12 +59,7 @@ export function toLetterWalk(w: PublicWalk): LetterWalk {
 }
 
 export async function getWalk(walkId: string): Promise<{ walk: PublicWalk; letterText: string | null } | null> {
-  const res = await query<WalkRow>(
-    `SELECT id, buyer_name, builder_name, project_name, tower, flat_number, bhk, possession_date, letter_text, created_at
-     FROM walks WHERE id = $1`,
-    [walkId]
-  );
-  const row = res.rows[0];
+  const row = await getStore().getWalk(walkId);
   if (!row) return null;
   return { walk: serializeWalk(row), letterText: row.letter_text ?? null };
 }
@@ -83,37 +78,32 @@ export interface NumberedSnag {
   photo_number: number;
 }
 
-/** All snags of a walk, numbered 1..n in room order then capture order, plus room grouping. */
-export async function getNumberedSnags(walkId: string) {
-  const roomsRes = await query<{ id: string; room_type: string }>(
-    `SELECT id, walk_id, room_type, status, checklist, created_at
-     FROM rooms WHERE walk_id = $1
-     ORDER BY created_at ASC`,
-    [walkId]
-  );
-  const snagsRes = await query(
-    `SELECT s.id, s.walk_id, s.room_id, s.category, s.severity, s.description, s.location_note, s.photo_url, s.created_at, r.room_type
-     FROM snags s JOIN rooms r ON s.room_id = r.id
-     WHERE s.walk_id = $1
-     ORDER BY r.created_at ASC, s.created_at ASC`,
-    [walkId]
-  );
+/**
+ * Number snags 1..n in room order, then capture order within a room, and group them by room. The same
+ * numbers label the photo annexure and the letter, so both always agree. Snags of unknown rooms are dropped.
+ */
+export function numberSnags(rooms: RoomDoc[], snagDocs: SnagDoc[]) {
+  const roomOrder = new Map(rooms.map((r, i) => [r.id, i]));
+  const roomName = new Map(rooms.map((r) => [r.id, r.room_type]));
+  const ordered = snagDocs
+    .filter((s) => roomOrder.has(s.room_id))
+    .sort((a, b) => roomOrder.get(a.room_id)! - roomOrder.get(b.room_id)! || a.created_at.localeCompare(b.created_at));
 
-  const snags: NumberedSnag[] = snagsRes.rows.map((s, i) => ({
+  const snags: NumberedSnag[] = ordered.map((s, i) => ({
     id: s.id,
     walk_id: s.walk_id,
     room_id: s.room_id,
-    room_name: s.room_type,
+    room_name: roomName.get(s.room_id) ?? 'Room',
     category: s.category,
     severity: s.severity,
     description: s.description,
     location_note: s.location_note,
     photo_url: s.photo_url,
-    created_at: s.created_at instanceof Date ? s.created_at.toISOString() : s.created_at,
+    created_at: s.created_at,
     photo_number: i + 1,
   }));
 
-  const groups: LetterRoomGroup[] = roomsRes.rows.map((r) => ({
+  const groups: LetterRoomGroup[] = rooms.map((r) => ({
     room_name: r.room_type,
     snags: snags
       .filter((s) => s.room_id === r.id)
@@ -127,6 +117,13 @@ export async function getNumberedSnags(walkId: string) {
   }));
 
   return { snags, groups };
+}
+
+/** All snags of a walk, numbered, plus the room grouping used by the letter. */
+export async function getNumberedSnags(walkId: string) {
+  const store = getStore();
+  const [rooms, snagDocs] = await Promise.all([store.listRooms(walkId), store.listSnagsByWalk(walkId)]);
+  return { rooms, ...numberSnags(rooms, snagDocs) };
 }
 
 // ---------------------------------------------------------------------------

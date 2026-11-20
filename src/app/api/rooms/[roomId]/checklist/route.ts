@@ -1,18 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { query } from '@/lib/db';
-import { generateRoomChecklist } from '@/lib/gemini';
+import { generateRoomChecklist, type ChecklistItem } from '@/lib/gemini';
+import { getStore } from '@/lib/store';
 import { isUuid } from '@/lib/walks';
 
 type Ctx = { params: Promise<{ roomId: string }> };
 
+/** The room plus the walk details Gemini uses for context. */
 async function loadRoom(roomId: string) {
-  const res = await query(
-    `SELECT r.id, r.walk_id, r.room_type, r.status, r.checklist, w.bhk, w.project_name
-     FROM rooms r JOIN walks w ON r.walk_id = w.id
-     WHERE r.id = $1`,
-    [roomId]
-  );
-  return res.rows[0] ?? null;
+  const store = getStore();
+  const room = await store.getRoom(roomId);
+  if (!room) return null;
+  const walk = await store.getWalk(room.walk_id);
+  return { ...room, bhk: walk?.bhk ?? 2, project_name: walk?.project_name ?? '' };
 }
 
 async function regenerate(room: { id: string; room_type: string; bhk: number; project_name: string }) {
@@ -20,7 +19,7 @@ async function regenerate(room: { id: string; room_type: string; bhk: number; pr
     bhk: `${room.bhk} BHK`,
     project: room.project_name,
   });
-  await query(`UPDATE rooms SET checklist = $1 WHERE id = $2`, [JSON.stringify(data), room.id]);
+  await getStore().setChecklist(room.id, data);
   return { checklist: data, source };
 }
 
@@ -32,14 +31,7 @@ export async function GET(_req: NextRequest, { params }: Ctx) {
     const room = await loadRoom(roomId);
     if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
 
-    let checklist = room.checklist;
-    if (typeof checklist === 'string') {
-      try {
-        checklist = JSON.parse(checklist);
-      } catch {
-        checklist = [];
-      }
-    }
+    const checklist = room.checklist;
     if (Array.isArray(checklist) && checklist.length > 0) {
       return NextResponse.json({ checklist, source: 'saved' });
     }
@@ -73,14 +65,15 @@ export async function PUT(request: NextRequest, { params }: Ctx) {
     if (!Array.isArray(checklist) || checklist.length > 20) {
       return NextResponse.json({ error: 'Invalid checklist' }, { status: 400 });
     }
-    const safe = checklist.map((it, i) => ({
+    const safe: ChecklistItem[] = checklist.map((it, i) => ({
       id: String(it?.id ?? i + 1).slice(0, 12),
       item: String(it?.item ?? '').slice(0, 300),
       category: String(it?.category ?? 'other').slice(0, 30),
       checked: Boolean(it?.checked),
     }));
-    const res = await query(`UPDATE rooms SET checklist = $1 WHERE id = $2`, [JSON.stringify(safe), roomId]);
-    if (res.rowCount === 0) return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+    if (!(await getStore().setChecklist(roomId, safe))) {
+      return NextResponse.json({ error: 'Room not found' }, { status: 404 });
+    }
     return NextResponse.json({ checklist: safe });
   } catch (error) {
     console.error('[api/checklist] PUT failed:', error);

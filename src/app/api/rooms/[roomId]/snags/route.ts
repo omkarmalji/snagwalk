@@ -47,11 +47,12 @@ export async function POST(request: NextRequest, { params }: Ctx) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
+    const note = form.get('note');
 
     // Upload and analysis are independent: run them in parallel.
     const [photoUrl, analysis] = await Promise.all([
       uploadPhotoToGcs(buffer, mimeType),
-      analyzeSnagPhoto(buffer, mimeType, room.room_type),
+      analyzeSnagPhoto(buffer, mimeType, room.room_type, typeof note === 'string' ? note : undefined),
     ]);
 
     const snag = await store.createSnag({

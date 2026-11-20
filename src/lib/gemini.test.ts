@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RERA_CLAUSE, normalizeSnagAnalysis, parseJson, templateLetter, type LetterRoomGroup, type LetterWalk } from './gemini';
+import { RERA_CLAUSE, isRetryableAiError, normalizeSnagAnalysis, parseJson, templateLetter, type LetterRoomGroup, type LetterWalk } from './gemini';
 
 describe('parseJson', () => {
   it('strips markdown code fences around JSON', () => {
@@ -105,5 +105,18 @@ describe('templateLetter (Gemini-unavailable fallback)', () => {
 
   it('uses no em dashes (UI copy rule)', () => {
     expect(templateLetter(walk, rooms, '20 November 2026')).not.toContain('—');
+  });
+});
+
+describe('isRetryableAiError', () => {
+  it('retries quota and overload errors', () => {
+    expect(isRetryableAiError({ status: 429, message: 'x' })).toBe(true);
+    expect(isRetryableAiError(new Error('Resource exhausted. Please try again later.'))).toBe(true);
+    expect(isRetryableAiError(new Error('got status: 503 Service Unavailable'))).toBe(true);
+  });
+  it('fails fast on bad requests and auth errors', () => {
+    expect(isRetryableAiError({ status: 400, message: 'Invalid argument' })).toBe(false);
+    expect(isRetryableAiError(new Error('Permission denied on resource'))).toBe(false);
+    expect(isRetryableAiError(new Error('model gemini-x-1429 not found'))).toBe(false);
   });
 });

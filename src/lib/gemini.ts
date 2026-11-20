@@ -121,6 +121,25 @@ export function getAiStatus() {
   };
 }
 
+let globalClient: GoogleGenAI | null = null;
+
+/** Same model on the global endpoint: a separate quota pool, used only when the regional endpoint is saturated. */
+function getGlobalClient(): GoogleGenAI | null {
+  if (authMode !== 'vertex-adc' || LOCATION === 'global') return null;
+  globalClient ??= new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location: 'global' });
+  return globalClient;
+}
+
+/** Quota and overload errors are worth retrying; bad requests and auth failures are not. */
+export function isRetryableAiError(err: unknown): boolean {
+  const e = err as { status?: number; code?: number; message?: string } | null;
+  const code = e?.status ?? e?.code;
+  if (code === 429 || code === 500 || code === 503) return true;
+  return /\b(429|503)\b|resource exhausted|unavailable|overloaded|deadline/i.test(String(e?.message ?? err));
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 function shortError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   // Google errors embed a JSON blob; keep the first sentence readable.
@@ -139,27 +158,44 @@ async function generate(opts: {
   if (opts.image) parts.push({ inlineData: { data: opts.image.data, mimeType: opts.image.mimeType } });
   parts.push({ text: opts.prompt });
 
-  try {
-    const res = await getClient().models.generateContent({
-      model: MODEL_NAME,
-      contents: [{ role: 'user', parts }],
-      config: {
-        temperature: opts.temperature ?? 0.2,
-        ...(THINKING !== 'OFF' ? { thinkingConfig: { thinkingLevel: THINKING as ThinkingLevel } } : {}),
-        ...(opts.image ? { mediaResolution: MediaResolution.MEDIA_RESOLUTION_MEDIUM } : {}),
-        ...(opts.schema ? { responseMimeType: 'application/json', responseSchema: opts.schema } : {}),
-      },
-    });
-    const text = res.text;
-    if (!text) throw new Error('Gemini returned an empty response');
-    status.lastOk = new Date().toISOString();
-    return text;
-  } catch (err) {
-    status.lastError = shortError(err);
-    status.lastErrorAt = new Date().toISOString();
-    console.warn(`[gemini] ${authMode} call failed: ${status.lastError}`);
-    throw err;
+  const request = {
+    model: MODEL_NAME,
+    contents: [{ role: 'user', parts }],
+    config: {
+      temperature: opts.temperature ?? 0.2,
+      ...(THINKING !== 'OFF' ? { thinkingConfig: { thinkingLevel: THINKING as ThinkingLevel } } : {}),
+      ...(opts.image ? { mediaResolution: MediaResolution.MEDIA_RESOLUTION_MEDIUM } : {}),
+      ...(opts.schema ? { responseMimeType: 'application/json', responseSchema: opts.schema } : {}),
+    },
+  };
+
+  // Up to three attempts on quota or overload errors: regional, regional again after a short backoff, then the
+  // global endpoint. Anything else fails fast so the caller can fall back.
+  const attempts: Array<{ client: () => GoogleGenAI | null; delay: number }> = [
+    { client: getClient, delay: 0 },
+    { client: getClient, delay: 700 + Math.random() * 300 },
+    { client: getGlobalClient, delay: 1200 + Math.random() * 400 },
+  ];
+  let lastErr: unknown;
+  for (const attempt of attempts) {
+    const c = attempt.client();
+    if (!c) continue;
+    if (attempt.delay) await sleep(attempt.delay);
+    try {
+      const res = await c.models.generateContent(request);
+      const text = res.text;
+      if (!text) throw new Error('Gemini returned an empty response');
+      status.lastOk = new Date().toISOString();
+      return text;
+    } catch (err) {
+      lastErr = err;
+      status.lastError = shortError(err);
+      status.lastErrorAt = new Date().toISOString();
+      console.warn(`[gemini] ${authMode} call failed: ${status.lastError}`);
+      if (!isRetryableAiError(err)) break;
+    }
   }
+  throw lastErr;
 }
 
 export function parseJson<T>(raw: string): T {
@@ -316,8 +352,12 @@ const snagSchema: Schema = {
 export async function analyzeSnagPhoto(
   imageBuffer: Buffer,
   mimeType: string,
-  roomContext: string
+  roomContext: string,
+  inspectorNote?: string
 ): Promise<AiResult<SnagAnalysisResult>> {
+  // A note from the live inspector (Gemini Live) focuses the analysis on the defect it just saw. It is a hint
+  // about where to look, never a source of facts: the photo decides category, severity and description.
+  const note = inspectorNote?.replace(/[\r\n"`]+/g, ' ').trim().slice(0, 200);
   const prompt = `You are a civil engineer doing a possession-day snag inspection of an Indian apartment, room: "${roomContext}".
 Identify the single most important construction, finishing or MEP defect visible in this photo.
 
@@ -329,7 +369,9 @@ Rules:
    - minor: hairline paint scratch, dirty grout, smudges, small finish blemish.
 3. If there is no visible defect, return category "other", severity "minor", and say so in description.
 4. location_note: concise position, e.g. "Bottom left corner near skirting".
-5. box_2d: bounding box of the defect, [ymin, xmin, ymax, xmax] scaled 0-1000. null if no defect.`;
+5. box_2d: bounding box of the defect, [ymin, xmin, ymax, xmax] scaled 0-1000. null if no defect.${
+    note ? `\n6. The inspector on site pointed at: "${note}". Focus on that defect if the photo shows it.` : ''
+  }`;
 
   try {
     const raw = await generate({

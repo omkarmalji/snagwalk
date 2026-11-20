@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "smoke": "node scripts/smoke.mjs",
     "release:hosting": "node scripts/release-hosting.mjs"
   },
@@ -40,6 +41,7 @@
     "eslint-config-next": "15.5.29",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "3.2.4"
   }
 }

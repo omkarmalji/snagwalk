@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { alloyDbStreamFactory, type AlloyDbIpType } from './alloydb-connector';
+import { assertSafeSql } from './sql-guard';
 
 // DATE columns come back as 'YYYY-MM-DD' strings. The default parser builds a local-midnight Date,
 // which toISOString() shifts to the previous day in IST.
@@ -153,10 +154,7 @@ export async function query<T extends QueryResultRow = any>(
   text: string,
   params: unknown[] = []
 ): Promise<QueryResult<T>> {
-  const normalized = text.trim().toUpperCase();
-  if (/\bDROP\s+TABLE\b/.test(normalized) || /^TRUNCATE\b/.test(normalized)) {
-    throw new Error('Guardrail violation: DROP TABLE and TRUNCATE are prohibited.');
-  }
+  assertSafeSql(text);
 
   if (dbHost && Date.now() >= state.circuitOpenUntil) {
     try {

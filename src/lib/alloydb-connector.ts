@@ -129,7 +129,7 @@ function encodeString(field: number, value: string): Buffer {
 }
 
 /** MetadataExchangeRequest { user_agent = 1; auth_type = 2 (DB_NATIVE = 1); oauth2_token = 3 } */
-function metadataRequest(token: string): Buffer {
+export function metadataRequest(token: string): Buffer {
   const body = Buffer.concat([
     encodeString(1, USER_AGENT),
     Buffer.from([(2 << 3) | 0, 1]),
@@ -141,7 +141,7 @@ function metadataRequest(token: string): Buffer {
 }
 
 /** MetadataExchangeResponse { response_code = 1 (OK = 1, ERROR = 2); error = 2 } */
-function parseMetadataResponse(buf: Buffer): { ok: boolean; error: string } {
+export function parseMetadataResponse(buf: Buffer): { ok: boolean; error: string } {
   let i = 0;
   let code = 0;
   let error = '';

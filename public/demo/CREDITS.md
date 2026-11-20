@@ -1,9 +1,9 @@
 # Demo photos
 
-Real defect photos used by the in-app demo (`/demo`). Resized to 1400px; otherwise unmodified.
+Real defect photos used by the in-app demo (`/demo`).
 
-| File | Source | Author | License |
-|---|---|---|---|
-| bathroom-tile.jpg | https://commons.wikimedia.org/wiki/File:2019_broken_tile_in_bathroom.jpg | Gerardolagunes | CC BY-SA 4.0 |
-| kitchen-socket.jpg | https://commons.wikimedia.org/wiki/File:Burned_stove_socket.JPG | katyxr | CC BY-SA 3.0 |
-| bedroom-paint.jpg | https://commons.wikimedia.org/wiki/File:Paint_peeling_off_bathroom_wall.jpg | Doggo19292 | CC BY-SA 4.0 |
+| File | Room in demo | Source | Author | License |
+|---|---|---|---|---|
+| bathroom-seepage.jpg | Master Bathroom | https://commons.wikimedia.org/wiki/File:Homes_in_Need_(20220125-RD-LSC-0345).jpg (cropped to the ceiling; people removed from frame, resized) | U.S. Department of Agriculture (USDAgov) | Public domain |
+| bedroom-crack.jpg | Master Bedroom | Supplied by the SnagWalk team | SnagWalk team | Used with permission |
+| entrance-damp.jpg | Entrance & Passage | https://www.flickr.com/photos/21500897@N07/16051601217 | franksteiner | CC BY 2.0 |

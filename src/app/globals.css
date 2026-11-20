@@ -3,21 +3,23 @@
 @tailwind utilities;
 
 /*
- * Palette: cool neutral + one cobalt accent. Warm hues are reserved for defect severity.
- * Every text token meets WCAG AA (4.5:1) on bg, surface and surface-2 in both themes.
+ * SnagWalk design tokens. Source of truth: docs/DESIGN.md.
+ * Palette: cool neutral + one brand blue taken from the logo (#193BC4). Warm hues are reserved for defect severity.
+ * Every text token meets WCAG AA (4.5:1) on bg, surface and surface-2 in both themes (src/lib/design-tokens.test.ts).
  * Z-index scale: header 30, sticky action bar 40, toast 50.
  */
 :root {
-  --bg: 244 244 241;
-  --surface: 252 252 250;
-  --surface-2: 236 236 232;
-  --line: 222 222 217;
-  --ink: 20 20 22;
-  --ink-2: 88 88 94;
-  --ink-3: 106 106 112;
-  --accent: 46 76 214;
-  --accent-ink: 250 250 252;
-  --accent-soft: 228 233 252;
+  --bg: 244 245 248;
+  --surface: 252 252 253;
+  --surface-2: 235 237 242;
+  --line: 221 224 231;
+  --ink: 16 16 17;
+  --ink-2: 82 86 96;
+  --ink-3: 96 100 110;
+  --brand: 25 59 196;
+  --accent: 25 59 196;
+  --accent-ink: 255 255 255;
+  --accent-soft: 229 234 251;
   --crit: 196 40 32;
   --crit-soft: 252 231 228;
   --major: 150 88 0;
@@ -28,16 +30,17 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: 13 13 15;
-    --surface: 22 22 25;
-    --surface-2: 32 32 36;
-    --line: 44 44 50;
-    --ink: 236 236 239;
-    --ink-2: 164 164 172;
-    --ink-3: 136 136 144;
-    --accent: 124 146 255;
-    --accent-ink: 12 14 32;
-    --accent-soft: 30 37 74;
+    --bg: 11 12 16;
+    --surface: 19 21 27;
+    --surface-2: 29 32 40;
+    --line: 41 45 56;
+    --ink: 236 238 243;
+    --ink-2: 164 168 180;
+    --ink-3: 138 143 156;
+    --brand: 107 147 255;
+    --accent: 107 147 255;
+    --accent-ink: 8 12 32;
+    --accent-soft: 22 34 78;
     --crit: 255 112 98;
     --crit-soft: 64 24 22;
     --major: 240 176 72;
@@ -64,6 +67,10 @@ select,
 textarea,
 label {
   touch-action: manipulation;
+}
+
+::selection {
+  background: rgb(var(--accent) / 0.22);
 }
 
 :focus-visible {
@@ -140,7 +147,7 @@ input[type='date'].date-field::-webkit-calendar-picker-indicator {
 
 /* The letter is a document: it stays light in both themes and when exported. */
 .paper {
-  --ink: 20 20 22;
+  --ink: 16 16 17;
   --ink-2: 70 70 76;
   --ink-3: 106 106 112;
   --line: 226 226 221;
@@ -150,6 +157,9 @@ input[type='date'].date-field::-webkit-calendar-picker-indicator {
   --crit-soft: 252 231 228;
   --major: 150 88 0;
   --major-soft: 252 240 214;
+  --brand: 25 59 196;
+  --accent: 25 59 196;
+  --accent-soft: 229 234 251;
   color: rgb(var(--ink));
   background: rgb(var(--surface));
 }

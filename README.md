@@ -52,9 +52,10 @@ $0.25 (about ₹20) of AI cost.
 ## Engineering
 
 - TypeScript strict, Next.js 15 App Router, React 19, Tailwind design tokens (light and dark, WCAG AA contrast).
-- 54 unit tests (Vitest) for the logic that must not break: PDF page breaks, Gemini output normalisation,
+- 133 unit tests (Vitest) for the logic that must not break: PDF page breaks, Gemini output normalisation,
   fallback letter invariants (every photo cited exactly once, 15 days, RERA clause), letter fingerprints,
-  the data layer contract and photo numbering, room provisioning.
+  the data layer contract and photo numbering, room provisioning, and WCAG AA contrast of every design token
+  in both themes (design system: [docs/DESIGN.md](docs/DESIGN.md)).
 - 19-check end-to-end smoke test against a running server with real Gemini, Firestore and Cloud Storage.
 - CI on every push: typecheck, lint, unit tests, build (`.github/workflows/ci.yml`).
 - Accessibility: labelled controls, focus moves to the review form after analysis, one concise screen-reader

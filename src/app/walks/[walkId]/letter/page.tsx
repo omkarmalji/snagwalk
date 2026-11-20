@@ -438,7 +438,7 @@ function PaperSkeleton({ count, generating }: { count: number; generating: boole
     <div aria-label="Drafting letter">
       {generating && (
         <p className="mb-6 flex items-center gap-2 text-[14px] font-medium text-ink-2">
-          <Sparkle className="size-4 animate-pulse text-[rgb(46_76_214)]" weight="fill" />
+          <Sparkle className="size-4 animate-pulse text-accent" weight="fill" />
           Gemini is drafting your letter{count ? ` from ${count} ${count === 1 ? 'snag' : 'snags'}` : ''}
         </p>
       )}

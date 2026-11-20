@@ -13,6 +13,7 @@ module.exports = {
         ink: token('ink'),
         'ink-2': token('ink-2'),
         'ink-3': token('ink-3'),
+        brand: token('brand'),
         accent: token('accent'),
         'accent-ink': token('accent-ink'),
         'accent-soft': token('accent-soft'),

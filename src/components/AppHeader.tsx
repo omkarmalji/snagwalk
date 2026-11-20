@@ -82,7 +82,6 @@ export default function AppHeader({
         ) : (
           <Link href="/" className="flex items-center gap-2.5" aria-label="SnagWalk home">
             <BrandLogo />
-            <span className="text-[17px] font-semibold tracking-tight">SnagWalk</span>
           </Link>
         )}
         {title && <div className="min-w-0 flex-1 truncate text-center text-[15px] font-semibold sm:hidden">{title}</div>}

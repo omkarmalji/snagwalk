@@ -16,4 +16,4 @@ tsconfig.tsbuildinfo
 firebase.json
 .firebaserc
 hosting/
-live/
+/live/

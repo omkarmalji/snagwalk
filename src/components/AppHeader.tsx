@@ -57,13 +57,23 @@ export default function AppHeader({
   back,
   title,
   right,
+  overlay,
 }: {
   back?: { href: string; label: string };
   title?: ReactNode;
   right?: ReactNode;
+  /** Over a full-bleed background (landing): the backdrop shows through. */
+  overlay?: boolean;
 }) {
   return (
-    <header className="no-print sticky top-0 z-30 border-b border-line/70 bg-bg/80 backdrop-blur-xl supports-[backdrop-filter]:bg-bg/70">
+    <header
+      className={cn(
+        'no-print sticky top-0 z-30 border-b backdrop-blur-xl',
+        overlay
+          ? 'border-white/[0.07] bg-bg/25 supports-[backdrop-filter]:bg-bg/20'
+          : 'border-line/70 bg-bg/80 supports-[backdrop-filter]:bg-bg/70'
+      )}
+    >
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus:rounded-full focus:bg-accent focus:px-4 focus:py-2 focus:text-[14px] focus:font-medium focus:text-accent-ink"

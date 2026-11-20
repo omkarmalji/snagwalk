@@ -22,6 +22,7 @@ function block(selectorStart: string, from = 0): Record<string, Rgb> {
 const light = block(':root {');
 const dark = block(':root {', css.indexOf('@media (prefers-color-scheme: dark)'));
 const paper = { ...light, ...block('.paper {') };
+const landing = block('.theme-dark {');
 
 function luminance([r, g, b]: Rgb) {
   const lin = (c: number) => {
@@ -60,6 +61,12 @@ describe.each([
 
   it('brand mark is visible against the page (3:1 for graphics)', () => {
     expect(contrast(t.brand, t.bg)).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe('landing theme', () => {
+  it('.theme-dark uses exactly the dark-mode tokens', () => {
+    expect(landing).toEqual(dark);
   });
 });
 

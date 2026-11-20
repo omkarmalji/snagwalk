@@ -15,6 +15,13 @@ Change a colour here, in the CSS and in the test together, never inline in a com
 - **Favicon:** `src/app/icon.svg`, brand-blue mark on a white rounded tile, so it reads in light and dark browser tabs.
 - **Clear space:** at least half the mark's width on every side. Minimum size 16px.
 
+## Landing background
+
+The landing page sits on the ThreeUI **Nebula** field (`src/effects/structure-flow/`, exact registered source,
+hash-checked) in both themes: `.theme-dark` applies the dark tokens to that page only. Tint is applied through the
+component's own props: `hue={-27}` (indigo to the logo blue), `saturation={0.85}`, `brightness={0.9}`. Content over it
+uses glass surfaces (`bg-surface/70` + `backdrop-blur-xl`, `border-white/10`). Reduced motion shows a static frame.
+
 ## Colour
 
 One accent. Neutrals are slightly cool, to sit with the blue. Warm hues mean severity, nothing else.

@@ -9,6 +9,8 @@ import { Button, ButtonLink, Card, cn } from '@/components/ui';
 import { api, formatDate, jsonInit, knownWalkIds, rememberWalk } from '@/lib/client';
 import { useReveal } from '@/lib/motion';
 import { BHK_OPTIONS, defaultRoomsFor } from '@/lib/shared';
+import { StructureFlowCollection } from '@/effects/structure-flow/StructureFlowCollection';
+import '@/effects/structure-flow/styles.css';
 
 interface WalkSummary {
   id: string;
@@ -115,8 +117,12 @@ export default function HomePage() {
   }
 
   return (
-    <div ref={scope} className="min-h-[100dvh]">
-      <AppHeader />
+    <div ref={scope} className="theme-dark relative isolate min-h-[100dvh] bg-bg">
+      {/* Full-bleed nebula behind everything, header included. Tinted from indigo to the logo blue, slightly muted. */}
+      <div aria-hidden className="fixed inset-0 -z-10">
+        <StructureFlowCollection variant="nebula" hue={-27} saturation={0.85} brightness={0.9} />
+      </div>
+      <AppHeader overlay />
       <main id="main" className="mx-auto max-w-6xl px-4 pb-20 sm:px-6">
         {/* Above the fold: headline and the whole form in one viewport, on a phone and on a laptop. */}
         <div className="grid gap-x-14 gap-y-4 pt-4 sm:gap-y-8 sm:pt-8 lg:min-h-[calc(100dvh-4rem)] lg:grid-cols-12 lg:items-center lg:py-8">
@@ -153,7 +159,10 @@ export default function HomePage() {
           </section>
 
           <section className="lg:col-span-6">
-            <Card data-reveal className="p-4 shadow-lift sm:p-6">
+            <Card
+              data-reveal
+              className="border-white/10 bg-surface/70 p-4 shadow-[0_24px_64px_-24px_rgb(0_0_0/0.6)] backdrop-blur-xl sm:p-6"
+            >
               <h2 className="hidden text-[19px] font-semibold tracking-tight sm:block">Start a possession walk</h2>
 
               <form onSubmit={submit} noValidate className="grid grid-cols-2 gap-x-3 gap-y-3 sm:mt-5 sm:gap-y-4">
@@ -249,7 +258,7 @@ export default function HomePage() {
                 <li key={w.id}>
                   <Link
                     href={`/walks/${w.id}`}
-                    className="group flex items-center gap-4 rounded-card border border-line bg-surface px-4 py-3.5 transition-colors hover:bg-surface-2/60"
+                    className="group flex items-center gap-4 rounded-card border border-white/10 bg-surface/60 px-4 py-3.5 backdrop-blur-xl transition-colors hover:bg-surface-2/70"
                   >
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[15px] font-medium">

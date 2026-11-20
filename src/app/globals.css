@@ -50,6 +50,29 @@
   }
 }
 
+/* The landing page sits on the dark nebula in both themes: same values as dark mode (checked in tests). */
+.theme-dark {
+  --bg: 11 12 16;
+  --surface: 19 21 27;
+  --surface-2: 29 32 40;
+  --line: 41 45 56;
+  --ink: 236 238 243;
+  --ink-2: 164 168 180;
+  --ink-3: 138 143 156;
+  --brand: 107 147 255;
+  --accent: 107 147 255;
+  --accent-ink: 8 12 32;
+  --accent-soft: 22 34 78;
+  --crit: 255 112 98;
+  --crit-soft: 64 24 22;
+  --major: 240 176 72;
+  --major-soft: 58 40 12;
+  --ok: 88 200 140;
+  color-scheme: dark;
+  color: rgb(var(--ink));
+}
+
+
 html {
   -webkit-text-size-adjust: 100%;
 }

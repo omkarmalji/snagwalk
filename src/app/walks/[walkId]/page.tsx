@@ -171,7 +171,7 @@ export default function WalkPage() {
     <div ref={scope} className="min-h-[100dvh]">
       <AppHeader back={{ href: '/', label: 'All walks' }} title={data ? `Flat ${data.walk.flat_number}` : undefined} />
 
-      <main className="mx-auto max-w-6xl px-4 pb-36 pt-6 sm:px-6 lg:pb-20 lg:pt-10">
+      <main id="main" className="mx-auto max-w-6xl px-4 pb-36 pt-6 sm:px-6 lg:pb-20 lg:pt-10">
         <div className="grid gap-8 lg:grid-cols-12 lg:gap-12">
           {/* Summary */}
           <aside className="min-w-0 lg:col-span-4">

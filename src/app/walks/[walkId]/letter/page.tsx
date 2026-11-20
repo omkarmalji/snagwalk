@@ -237,7 +237,7 @@ export default function LetterPage() {
     <div ref={scope} className="min-h-[100dvh]">
       <AppHeader back={{ href: `/walks/${walkId}`, label: 'Rooms' }} title="Builder letter" />
 
-      <main className="mx-auto max-w-6xl px-4 pb-32 pt-6 sm:px-6 lg:pb-20 lg:pt-10">
+      <main id="main" className="mx-auto max-w-6xl px-4 pb-32 pt-6 sm:px-6 lg:pb-20 lg:pt-10">
         <div className="grid gap-8 lg:grid-cols-12 lg:gap-12">
           <aside className="no-print min-w-0 lg:order-2 lg:col-span-4">
             <div className="lg:sticky lg:top-24">

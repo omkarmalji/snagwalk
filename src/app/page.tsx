@@ -117,7 +117,7 @@ export default function HomePage() {
   return (
     <div ref={scope} className="min-h-[100dvh]">
       <AppHeader />
-      <main className="mx-auto max-w-6xl px-4 pb-20 sm:px-6">
+      <main id="main" className="mx-auto max-w-6xl px-4 pb-20 sm:px-6">
         {/* Above the fold: headline and the whole form in one viewport, on a phone and on a laptop. */}
         <div className="grid gap-x-14 gap-y-4 pt-4 sm:gap-y-8 sm:pt-8 lg:min-h-[calc(100dvh-4rem)] lg:grid-cols-12 lg:items-center lg:py-8">
           <section className="lg:col-span-6">

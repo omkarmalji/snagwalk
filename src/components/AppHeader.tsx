@@ -64,6 +64,12 @@ export default function AppHeader({
 }) {
   return (
     <header className="no-print sticky top-0 z-30 border-b border-line/70 bg-bg/80 backdrop-blur-xl supports-[backdrop-filter]:bg-bg/70">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-3 focus:z-50 focus:rounded-full focus:bg-accent focus:px-4 focus:py-2 focus:text-[14px] focus:font-medium focus:text-accent-ink"
+      >
+        Skip to content
+      </a>
       <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4 sm:px-6">
         {back ? (
           <Link

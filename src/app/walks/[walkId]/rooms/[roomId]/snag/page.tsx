@@ -204,7 +204,7 @@ export default function SnagCapturePage() {
       <input ref={cameraInput} type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" />
       <input ref={libraryInput} type="file" accept="image/*" onChange={onFile} className="hidden" />
 
-      <main className="mx-auto max-w-6xl px-4 pb-24 pt-6 sm:px-6 lg:pt-10">
+      <main id="main" className="mx-auto max-w-6xl px-4 pb-24 pt-6 sm:px-6 lg:pt-10">
         <div className="mb-6" data-reveal>
           {roomName === null ? (
             <Skeleton className="h-10 w-56" />
@@ -217,10 +217,24 @@ export default function SnagCapturePage() {
         </div>
 
         <div className="grid gap-8 lg:grid-cols-12 lg:gap-12">
-          <section className="min-w-0 lg:col-span-7" aria-live="polite">
+          <section className="min-w-0 lg:col-span-7">
+            {/* One concise announcement per phase, instead of re-reading the whole form on every change. */}
+            <p className="sr-only" role="status" aria-live="polite">
+              {phase === 'analyzing'
+                ? 'Photo received. Gemini is inspecting it.'
+                : phase === 'review' && draft?.isNew
+                  ? draft.source === 'gemini'
+                    ? `Gemini suggests a ${draft.severity} ${categoryLabel(draft.category).toLowerCase()} defect. ${draft.description} Check the details, then save.`
+                    : 'AI analysis is unavailable. Fill in the details, then save.'
+                  : ''}
+            </p>
             {phase === 'idle' && (
               <div data-reveal className="space-y-3">
-                {error && <p className="rounded-field bg-crit-soft px-4 py-3 text-[14px] text-crit">{error}</p>}
+                {error && (
+                  <p role="alert" className="rounded-field bg-crit-soft px-4 py-3 text-[14px] text-crit">
+                    {error}
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => cameraInput.current?.click()}
@@ -243,7 +257,12 @@ export default function SnagCapturePage() {
 
             {phase !== 'idle' && preview && (
               <Card className="overflow-hidden">
-                <PhotoStage src={preview} analyzing={phase === 'analyzing'} box={draft?.box ?? null} />
+                <PhotoStage
+                  src={preview}
+                  analyzing={phase === 'analyzing'}
+                  box={draft?.box ?? null}
+                  alt={draft?.description ? `Defect photo: ${draft.description}` : 'Defect photo'}
+                />
                 {phase === 'analyzing' && (
                   <div className="flex items-center gap-3 px-5 py-4">
                     <Sparkle className="size-5 animate-pulse text-accent" weight="fill" />
@@ -321,10 +340,12 @@ function PhotoStage({
   src,
   analyzing,
   box,
+  alt,
 }: {
   src: string;
   analyzing: boolean;
   box: [number, number, number, number] | null;
+  alt: string;
 }) {
   const wrap = useRef<HTMLDivElement>(null);
   const line = useRef<HTMLDivElement>(null);
@@ -356,10 +377,10 @@ function PhotoStage({
     <div className="flex justify-center bg-ink/95">
       <div ref={wrap} className="relative max-w-full overflow-hidden">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt="Defect photo" className="block max-h-[56vh] w-auto max-w-full" />
+        <img src={src} alt={alt} className="block max-h-[56vh] w-auto max-w-full" />
         {analyzing && (
           <>
-            <div className="absolute inset-0 bg-ink/25" />
+            <div aria-hidden className="absolute inset-0 bg-ink/25" />
             <div
               ref={line}
               className="absolute inset-x-0 top-0 h-16 -translate-y-1/2 bg-gradient-to-b from-transparent via-accent/35 to-transparent"
@@ -401,6 +422,11 @@ function ReviewForm({
   onDiscard: () => void;
 }) {
   const ref = useRef<HTMLFormElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  // Keyboard and screen-reader users land on the form Gemini just filled in.
+  useEffect(() => {
+    headingRef.current?.focus({ preventScroll: true });
+  }, [draft.id]);
   useGSAP(
     () => {
       if (prefersReducedMotion()) return;
@@ -422,7 +448,9 @@ function ReviewForm({
   return (
     <form ref={ref} onSubmit={onSubmit} className="space-y-5 p-5 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-[17px] font-semibold tracking-tight">{draft.isNew ? 'Check the details' : 'Edit snag'}</h2>
+        <h2 ref={headingRef} tabIndex={-1} className="text-[17px] font-semibold tracking-tight outline-none">
+          {draft.isNew ? 'Check the details' : 'Edit snag'}
+        </h2>
         {draft.source === 'gemini' && <SourceTag source="gemini" />}
         {draft.source === 'fallback' && (
           <span className="rounded-full bg-major-soft px-2.5 py-1 text-[12px] font-medium text-major">

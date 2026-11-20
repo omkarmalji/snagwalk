@@ -1,63 +1,92 @@
 # SnagWalk
 
-Possession-day snag inspection for Indian home buyers. Walk the new flat room by room, photograph defects,
-let Gemini classify them, and send the builder a formal snag letter with a photo annexure.
+**Find the defects before you sign.** An AI inspector for first-time home buyers in India.
 
-Built on Next.js 15, Gemini 3.5 Flash on Vertex AI, AlloyDB and Cloud Storage. Deploys to Cloud Run.
+On possession day a buyer gets minutes to check a flat the builder has had years to finish. SnagWalk walks the
+flat with them room by room: Gemini writes a checklist for each room, classifies every defect from a photo,
+and drafts the formal snag letter the builder must answer, in English, Hindi or Marathi.
 
-## The flow
+**Live:** https://snagwalk-app.web.app (mobile first; works on any phone browser, no install)
 
-| Screen | Route | What Gemini does |
+Built on Gemini 3.5 Flash (Vertex AI), AlloyDB, Cloud Storage, Cloud Run and Firebase Hosting.
+Architecture, request flows and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## The problem
+
+- Buyers inspect a new flat once, in a hurry, with no checklist and no evidence trail.
+- Defects found after the possession letter is signed turn into months of follow-up.
+- Under RERA Section 14(3) the builder must fix workmanship and quality defects reported within five years of
+  possession, but only a written, specific, dated complaint gets acted on.
+- Professional snag inspectors cost thousands of rupees per flat and are not available on short notice.
+
+## The product
+
+| Step | Route | What Gemini does |
 | --- | --- | --- |
-| Start a walk | `/` | Nothing yet. Rooms are provisioned from the BHK (bedrooms, bathrooms, utility). |
-| Rooms | `/walks/[walkId]` | Writes a 4-6 item checklist for each room on first open. |
-| Snag capture | `/walks/[walkId]/rooms/[roomId]/snag` | Reads the photo and returns category, severity, description, location and a bounding box drawn on the photo. The buyer edits or discards. |
-| Builder letter | `/walks/[walkId]/letter` | Drafts the formal notice from the snags table only: grouped by room, photo references, 15-day deadline, written confirmation. PDF, share and copy. |
+| Start a walk | `/` | Rooms are provisioned from the BHK (bedrooms, bathrooms, balcony, utility). |
+| Rooms | `/walks/[walkId]` | Writes a 4-6 item checklist per room: tile slope in bathrooms, socket earthing, door alignment. |
+| Snag capture | `/walks/[walkId]/rooms/[roomId]/snag` | Reads the photo and returns category, severity, description, location and a bounding box drawn on the photo. The buyer corrects or discards it. |
+| Builder letter | `/walks/[walkId]/letter` | Drafts the formal notice from the recorded snags only: grouped by room, photo references, 15-day deadline, written confirmation, RERA 14(3) clause. English, Hindi or Marathi. PDF with photo annexure, WhatsApp share, copy. |
 
-The letter stores a fingerprint of the snags it was written from. If a snag is added, edited or deleted the
-letter is marked stale and regenerated on the next visit, so it never cites a defect that no longer exists.
+The letter stores a fingerprint of the snags it was written from. Add, edit or delete a snag and the letter is
+marked stale and regenerated, so it never cites a defect that does not exist.
 
-## Google AI and Cloud
+## Google AI and Google Cloud
 
-- **Gemini 3.5 Flash on Vertex AI** (`@google/genai`), structured JSON output with enum-constrained schemas,
-  low thinking level and medium image resolution so a photo is analysed in about 3-6 seconds from `asia-south1`.
-- **Cloud Storage** for photos (private bucket). The browser loads them through `/api/photos`, which also keeps
-  the PDF export canvas untainted.
-- **AlloyDB** for walks, rooms and snags. Parameterized SQL only.
-- **Cloud Run** via the multi-stage `Dockerfile` (standalone Next.js on port 8080).
+| Product | How SnagWalk uses it |
+| --- | --- |
+| **Gemini 3.5 Flash on Vertex AI** | Three distinct tasks through `@google/genai`: vision defect classification with bounding boxes, room checklist generation, and multilingual legal-style letter drafting. Structured JSON output with enum-constrained `responseSchema`, low thinking level and medium media resolution (~4.6 s per photo from `asia-south1`). |
+| **AlloyDB Express (PostgreSQL 18)** | Walks, rooms and snags. Reached through an in-repo connector that implements the AlloyDB Auth Proxy protocol in Node.js (mTLS + IAM), since no npm connector exists. |
+| **Cloud Storage** | Private photo bucket, served through a same-origin proxy (also keeps the PDF canvas untainted). |
+| **Cloud Run** | Stateless Next.js standalone service, scales to zero, dedicated least-privilege service account. |
+| **Secret Manager** | Database password, mounted into Cloud Run. |
+| **Cloud Build + Artifact Registry** | Multi-stage Docker build and image registry. |
+| **Firebase Hosting** | Public URL and CDN in front of Cloud Run. |
+| **Agent Skills** | `.agents/skills/snagwalk-guardrails/SKILL.md`: database, Gemini and letter rules shared by the coding agent and enforced in code. |
 
-Every AI result carries a `source` (`gemini` or `fallback`) and the UI labels fallbacks honestly.
+Every AI result carries `source: 'gemini' | 'fallback'` and the UI labels fallbacks honestly.
 `GET /api/health` reports which model, auth mode, database and storage are live; the header shows it.
+
+**Cost:** a real two-room inspection made 6 Gemini calls for about $0.05. A full 3 BHK walk is roughly
+$0.25 (about ₹20) of AI cost.
+
+## Engineering
+
+- TypeScript strict, Next.js 15 App Router, React 19, Tailwind design tokens (light and dark, WCAG AA contrast).
+- 64 unit tests (Vitest) for the logic that must not break: PDF page breaks, SQL guardrail, Gemini output
+  normalisation, fallback letter invariants (every photo cited exactly once, 15 days, RERA clause), letter
+  fingerprints, the AlloyDB connector's protobuf framing, room provisioning.
+- 19-check end-to-end smoke test against a running server with real Gemini, AlloyDB and Cloud Storage.
+- CI on every push: typecheck, lint, unit tests, build (`.github/workflows/ci.yml`).
+- Accessibility: labelled controls, focus moves to the review form after analysis, one concise screen-reader
+  announcement per phase, skip link, reduced-motion support, large tap targets for one-handed use.
 
 ## Running locally
 
 ```bash
 pnpm install
-gcloud auth application-default login     # Gemini + Cloud Storage via ADC
+gcloud auth application-default login     # Gemini, Cloud Storage and AlloyDB via ADC
 cp .env.example .env.local                # set DB_PASSWORD (and ALLOYDB_INSTANCE_URI)
 pnpm dev
 ```
 
-AlloyDB is reached through the built-in connector (`src/lib/alloydb-connector.ts`): it fetches a short-lived
-client certificate from the AlloyDB Admin API with your ADC identity and opens mutual TLS to the instance on
-port 5433, so no VPC, PSC endpoint or Auth Proxy is needed. Your account needs `roles/alloydb.client`.
-The schema is created on first use (`CREATE TABLE IF NOT EXISTS`).
-
-If the database is unreachable, development falls back to a local JSON store (`.snagwalk_local_data.json`)
-and local photo storage (`.local_uploads/`). Both fallbacks are off in production.
+Your account needs `roles/aiplatform.user`, `roles/alloydb.client` and access to the bucket. The schema is
+created on first use (`CREATE TABLE IF NOT EXISTS`). If the database or bucket is unreachable, development
+falls back to a local JSON store and local photo storage; both fallbacks are off in production.
 
 ## Checks
 
 ```bash
 pnpm typecheck
 pnpm lint
+pnpm test                                               # unit tests
 pnpm build
-pnpm smoke http://localhost:3000 path/to/defect.jpg   # end-to-end API test against a running server
+pnpm smoke http://localhost:3000 path/to/defect.jpg     # end-to-end against a running server
 ```
 
-## Deploying to Cloud Run
+## Deploying
 
-Runs in `asia-southeast1` next to the AlloyDB cluster; Gemini is called in `asia-south1`.
+Cloud Run in `asia-southeast1` next to the AlloyDB cluster; Gemini is called in `asia-south1`.
 
 ```bash
 gcloud builds submit --region asia-southeast1 \
@@ -68,25 +97,15 @@ gcloud run deploy snagwalk --region asia-southeast1 \
   --set-env-vars GOOGLE_CLOUD_PROJECT=snagwalk-515212,GCS_BUCKET_NAME=snagwalk-photos-515212,VERTEX_AI_LOCATION=asia-south1,GEMINI_MODEL=gemini-3.5-flash,GEMINI_THINKING=low,ALLOYDB_INSTANCE_URI=projects/snagwalk-515212/locations/asia-southeast1/clusters/snagwalk-db/instances/primary,DB_USER=postgres,DB_NAME=postgres \
   --set-secrets DB_PASSWORD=snagwalk-db-password:latest \
   --allow-unauthenticated --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3
+pnpm release:hosting      # re-release Firebase Hosting so the CDN drops the previous revision's pages
 ```
 
 Service account `snagwalk-run` holds `roles/aiplatform.user`, `roles/alloydb.client`,
 `roles/serviceusage.serviceUsageConsumer`, `roles/storage.objectAdmin` on the bucket and
 `roles/secretmanager.secretAccessor` on `snagwalk-db-password`. No VPC connector is required.
 
-### Public URL (Firebase Hosting)
-
-**https://snagwalk-app.web.app** fronts the Cloud Run service: `firebase.json` rewrites every path to
-`snagwalk` in `asia-southeast1`. The CDN caches the prerendered home page, so **re-release Hosting after
-every Cloud Run deploy** to purge it:
-
-```bash
-pnpm release:hosting          # REST + ADC, no firebase login needed
-# or: firebase deploy --only hosting
-```
-
 ## Guardrails
 
-See `.agents/skills/snagwalk-guardrails/SKILL.md`. In short: snake_case tables with uuid ids, parameterized
-SQL, no DROP/TRUNCATE, photos only in Cloud Storage, fixed category and severity enums, letters that never
-invent defects, one primary action per screen with large tap targets.
+See `.agents/skills/snagwalk-guardrails/SKILL.md`: snake_case tables with uuid ids, parameterized SQL, no
+DROP or TRUNCATE (enforced and tested), photos only in Cloud Storage, fixed category and severity enums
+(enforced on model output), letters that never invent defects or facts, one primary action per screen.

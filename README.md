@@ -10,7 +10,7 @@ and drafts the formal snag letter the builder must answer, in English, Hindi or 
 **No flat handy?** Tap "Watch it work" on the home page (`/demo`): the app runs a full inspection by itself with real
 Gemini calls on real defect photos, in about 35 seconds, and leaves you a saved walk to explore.
 
-Built on Gemini 3.5 Flash and Gemini Live (Vertex AI), Firestore, Cloud Storage, Cloud Run and Firebase Hosting.
+Built on Gemini 3.5 Flash and Gemini Live (Vertex AI), Firestore, Cloud Storage, Cloud Run, Firebase Hosting and Cloud Build.
 Architecture, request flows and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## The problem
@@ -26,7 +26,7 @@ Architecture, request flows and design decisions: [docs/ARCHITECTURE.md](docs/AR
 | Step | Route | What Gemini does |
 | --- | --- | --- |
 | Start a walk | `/` | Rooms are provisioned from the BHK (bedrooms, bathrooms, balcony, utility). |
-| Rooms | `/walks/[walkId]` | Writes a 4-6 item checklist per room: tile slope in bathrooms, socket earthing, door alignment. |
+| Rooms | `/walks/[walkId]` | Writes a 4-6 item checklist per room, grounded in the methods Indian possession inspectors use (coin tap for hollow tiles, bucket test for drain slope, charger test for every socket, ELCB trip): [docs/INSPECTION_PRACTICE.md](docs/INSPECTION_PRACTICE.md). |
 | Live inspector | `/walks/[walkId]/rooms/[roomId]/live` | **Gemini Live** watches the camera (1 frame/s), listens, talks the buyer through the room in English, Hindi or Marathi, and calls a `log_snag` tool when it sees a defect. A sharp frame is then saved through the normal snag route. |
 | Snag capture | `/walks/[walkId]/rooms/[roomId]/snag` | Reads the photo and returns category, severity, description, location and a bounding box drawn on the photo. The buyer corrects or discards it. |
 | Builder letter | `/walks/[walkId]/letter` | Drafts the formal notice from the recorded snags only: grouped by room, photo references, 15-day deadline, written confirmation, RERA 14(3) clause. English, Hindi or Marathi. PDF with photo annexure, WhatsApp share, copy. |
@@ -57,7 +57,7 @@ $0.25 (about ₹20) of AI cost.
 ## Engineering
 
 - TypeScript strict, Next.js 15 App Router, React 19, Tailwind design tokens (light and dark, WCAG AA contrast).
-- 133 unit tests (Vitest) for the logic that must not break: PDF page breaks, Gemini output normalisation,
+- 142 unit tests (Vitest) for the logic that must not break: PDF page breaks, Gemini output normalisation,
   fallback letter invariants (every photo cited exactly once, 15 days, RERA clause), letter fingerprints,
   the data layer contract and photo numbering, room provisioning, and WCAG AA contrast of every design token
   in both themes (design system: [docs/DESIGN.md](docs/DESIGN.md)).

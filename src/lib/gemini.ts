@@ -1,5 +1,6 @@
 import { GoogleGenAI, MediaResolution, ThinkingLevel, Type, type Schema } from '@google/genai';
 import type { LetterLanguage } from '@/lib/shared';
+import { INSPECTION_METHODS, ROOM_PRACTICE, practiceKeyFor } from '@/lib/inspection-practice';
 
 /**
  * Gemini client for SnagWalk.
@@ -257,9 +258,11 @@ export async function generateRoomChecklist(
     context?.bhk ? ` (${context.bhk})` : ''
   }.
 Write a 4 to 6 item checklist for the room "${roomName}".
-Prioritise defects buyers commonly miss and builders must fix before handover: hollow tiles, tile slope to drain,
-dampness, paint finish, socket earthing, window locks and tracks, door alignment, plumbing leaks.
-Each item must be a specific physical check the buyer can do in under a minute with their phone and hands.`;
+Use the methods professional Indian possession inspectors use:
+${INSPECTION_METHODS.map((m) => `- ${m}`).join('\n')}
+Pick the checks that matter most for this room type and the defects buyers commonly miss before handover.
+Each item must be a specific physical check the buyer can do in under a minute with their phone, a coin, water or
+a charger, and should name the method (for example "Coin tap...", "Pour a bucket...").`;
 
   try {
     const raw = await generate({ prompt, schema: checklistSchema, temperature: 0.4 });
@@ -281,50 +284,13 @@ Each item must be a specific physical check the buyer can do in under a minute w
   return { source: 'fallback', data: getDefaultChecklist(roomName) };
 }
 
-function getDefaultChecklist(roomName: string): ChecklistItem[] {
-  const lower = roomName.toLowerCase();
-  const make = (items: Array<[string, string]>) =>
-    items.map(([item, category], i) => ({ id: String(i + 1), item, category, checked: false }));
-
-  if (lower.includes('kitchen')) {
-    return make([
-      ['Check granite countertop edges, joints and sink silicone sealing', 'woodwork'],
-      ['Run the sink tap and check the drain trap for leaks', 'plumbing'],
-      ['Test chimney and appliance sockets with a phone charger', 'electrical'],
-      ['Tap dado tiles for hollow sound and look for missing grout', 'tiles'],
-    ]);
-  }
-  if (lower.includes('bath') || lower.includes('toilet')) {
-    return make([
-      ['Pour water on the floor and confirm it flows to the drain', 'tiles'],
-      ['Check taps, health faucet and angle valves for drips', 'plumbing'],
-      ['Flush twice and check the commode base for seepage', 'plumbing'],
-      ['Test geyser and mirror light points', 'electrical'],
-    ]);
-  }
-  if (lower.includes('balcony') || lower.includes('utility')) {
-    return make([
-      ['Check railing height, weld joints and rust spots', 'doors_windows'],
-      ['Pour water and confirm it drains without pooling', 'flooring'],
-      ['Inspect exterior paint for cracks, peeling or seepage', 'wall_paint'],
-      ['Test the outdoor socket and washing machine tap point', 'electrical'],
-    ]);
-  }
-  if (lower.includes('entrance') || lower.includes('passage')) {
-    return make([
-      ['Open and close the main door fully; check it does not scrape', 'doors_windows'],
-      ['Test the lock, latch, peephole and door stopper', 'doors_windows'],
-      ['Check the door frame and architrave for gaps and cracks', 'woodwork'],
-      ['Test the doorbell and passage lights', 'electrical'],
-    ]);
-  }
-  return make([
-    ['Shine a phone torch along walls to spot patches and waviness', 'wall_paint'],
-    ['Slide every window; check locks, tracks and glass sealant', 'doors_windows'],
-    ['Tap floor tiles with a coin to find hollow spots', 'flooring'],
-    ['Check door latch, lock and frame alignment', 'doors_windows'],
-    ['Test every switch and socket, including AC points', 'electrical'],
-  ]);
+export function getDefaultChecklist(roomName: string): ChecklistItem[] {
+  return ROOM_PRACTICE[practiceKeyFor(roomName)].map(([item, category], i) => ({
+    id: String(i + 1),
+    item,
+    category,
+    checked: false,
+  }));
 }
 
 // ---------------------------------------------------------------------------

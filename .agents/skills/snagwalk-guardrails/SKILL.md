@@ -1,12 +1,12 @@
 ---
 name: snagwalk-guardrails
-description: Enforce database, Gemini output, and letter rules when building the SnagWalk app (possession-day flat inspection and builder snag letter). Use when writing SQL, API routes, Gemini prompts, or the snag letter.
+description: Enforce data, Gemini output, and letter rules when building the SnagWalk app (possession-day flat inspection and builder snag letter). Use when writing data access, API routes, Gemini prompts, or the snag letter.
 ---
-# Database rules
-1. snake_case for all table and column names.
-2. Every table has a primary key `id` (uuid, default gen_random_uuid()).
-3. Parameterized SQL queries only. Never concatenate user input into SQL.
-4. Never execute DROP TABLE or TRUNCATE (enforced in code by `src/lib/sql-guard.ts`, covered by unit tests).
+# Data rules
+1. snake_case for all collection and field names.
+2. Every document id is a uuid; route params are uuid-validated before any read.
+3. All reads and writes go through the typed data layer in `src/lib/store.ts`. Never build queries from raw user input.
+4. Never bulk-delete or drop collections. The store exposes single-document deletes only.
 5. Photos live in Cloud Storage bucket gs://snagwalk-photos-515212. Store only the URL in the database.
 
 # Gemini rules
@@ -20,7 +20,7 @@ description: Enforce database, Gemini output, and letter rules when building the
 1. Formal, polite, firm tone, addressed to the builder.
 2. Group snags by room, list severity, reference the photo number.
 3. Request a fix timeline of 15 days and ask for written confirmation.
-4. Never invent defects that are not in the snags table, and no facts beyond those given (addresses, agreement numbers).
+4. Never invent defects that are not in the snags collection, and no facts beyond those given (addresses, agreement numbers).
 5. The one fixed legal sentence allowed is the RERA Section 14(3) "without prejudice" clause (`RERA_CLAUSE` in `src/lib/gemini.ts`).
 6. Language: English, Hindi or Marathi. Keep names, flat details and every **[Photo #N]** tag unchanged when translating.
 7. The fallback template (Gemini unavailable) is English only and the UI says so.

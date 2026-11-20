@@ -8,7 +8,7 @@ and drafts the formal snag letter the builder must answer, in English, Hindi or 
 
 **Live:** https://snagwalk-app.web.app (mobile first; works on any phone browser, no install)
 
-Built on Gemini 3.5 Flash (Vertex AI), AlloyDB, Cloud Storage, Cloud Run and Firebase Hosting.
+Built on Gemini 3.5 Flash (Vertex AI), Firestore, Cloud Storage, Cloud Run and Firebase Hosting.
 Architecture, request flows and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## The problem
@@ -36,10 +36,9 @@ marked stale and regenerated, so it never cites a defect that does not exist.
 | Product | How SnagWalk uses it |
 | --- | --- |
 | **Gemini 3.5 Flash on Vertex AI** | Three distinct tasks through `@google/genai`: vision defect classification with bounding boxes, room checklist generation, and multilingual legal-style letter drafting. Structured JSON output with enum-constrained `responseSchema`, low thinking level and medium media resolution (~4.6 s per photo from `asia-south1`). |
-| **AlloyDB Express (PostgreSQL 18)** | Walks, rooms and snags. Reached through an in-repo connector that implements the AlloyDB Auth Proxy protocol in Node.js (mTLS + IAM), since no npm connector exists. |
+| **Firestore (Native mode)** | Walks, rooms and snags. Serverless, inside the free tier at this scale, IAM auth through the Cloud Run service account (no passwords), atomic batch write for a walk and its rooms. |
 | **Cloud Storage** | Private photo bucket, served through a same-origin proxy (also keeps the PDF canvas untainted). |
 | **Cloud Run** | Stateless Next.js standalone service, scales to zero, dedicated least-privilege service account. |
-| **Secret Manager** | Database password, mounted into Cloud Run. |
 | **Cloud Build + Artifact Registry** | Multi-stage Docker build and image registry. |
 | **Firebase Hosting** | Public URL and CDN in front of Cloud Run. |
 | **Agent Skills** | `.agents/skills/snagwalk-guardrails/SKILL.md`: database, Gemini and letter rules shared by the coding agent and enforced in code. |
@@ -53,10 +52,10 @@ $0.25 (about ₹20) of AI cost.
 ## Engineering
 
 - TypeScript strict, Next.js 15 App Router, React 19, Tailwind design tokens (light and dark, WCAG AA contrast).
-- 64 unit tests (Vitest) for the logic that must not break: PDF page breaks, SQL guardrail, Gemini output
-  normalisation, fallback letter invariants (every photo cited exactly once, 15 days, RERA clause), letter
-  fingerprints, the AlloyDB connector's protobuf framing, room provisioning.
-- 19-check end-to-end smoke test against a running server with real Gemini, AlloyDB and Cloud Storage.
+- 54 unit tests (Vitest) for the logic that must not break: PDF page breaks, Gemini output normalisation,
+  fallback letter invariants (every photo cited exactly once, 15 days, RERA clause), letter fingerprints,
+  the data layer contract and photo numbering, room provisioning.
+- 19-check end-to-end smoke test against a running server with real Gemini, Firestore and Cloud Storage.
 - CI on every push: typecheck, lint, unit tests, build (`.github/workflows/ci.yml`).
 - Accessibility: labelled controls, focus moves to the review form after analysis, one concise screen-reader
   announcement per phase, skip link, reduced-motion support, large tap targets for one-handed use.
@@ -65,14 +64,14 @@ $0.25 (about ₹20) of AI cost.
 
 ```bash
 pnpm install
-gcloud auth application-default login     # Gemini, Cloud Storage and AlloyDB via ADC
-cp .env.example .env.local                # set DB_PASSWORD (and ALLOYDB_INSTANCE_URI)
+gcloud auth application-default login     # Gemini, Firestore and Cloud Storage via ADC
+cp .env.example .env.local                # DATA_STORE=firestore, or local for a JSON file
 pnpm dev
 ```
 
-Your account needs `roles/aiplatform.user`, `roles/alloydb.client` and access to the bucket. The schema is
-created on first use (`CREATE TABLE IF NOT EXISTS`). If the database or bucket is unreachable, development
-falls back to a local JSON store and local photo storage; both fallbacks are off in production.
+Your account needs `roles/aiplatform.user`, `roles/datastore.user` and access to the bucket. With
+`DATA_STORE=local` the app runs on a JSON file with no credentials (Gemini then falls back to labelled
+templates). Production always uses Firestore and Cloud Storage.
 
 ## Checks
 
@@ -86,7 +85,7 @@ pnpm smoke http://localhost:3000 path/to/defect.jpg     # end-to-end against a r
 
 ## Deploying
 
-Cloud Run in `asia-southeast1` next to the AlloyDB cluster; Gemini is called in `asia-south1`.
+Cloud Run and Firestore in `asia-southeast1`; Gemini is called in `asia-south1`.
 
 ```bash
 gcloud builds submit --region asia-southeast1 \
@@ -94,18 +93,16 @@ gcloud builds submit --region asia-southeast1 \
 gcloud run deploy snagwalk --region asia-southeast1 \
   --image asia-southeast1-docker.pkg.dev/snagwalk-515212/snagwalk/app:<tag> \
   --service-account snagwalk-run@snagwalk-515212.iam.gserviceaccount.com \
-  --set-env-vars GOOGLE_CLOUD_PROJECT=snagwalk-515212,GCS_BUCKET_NAME=snagwalk-photos-515212,VERTEX_AI_LOCATION=asia-south1,GEMINI_MODEL=gemini-3.5-flash,GEMINI_THINKING=low,ALLOYDB_INSTANCE_URI=projects/snagwalk-515212/locations/asia-southeast1/clusters/snagwalk-db/instances/primary,DB_USER=postgres,DB_NAME=postgres \
-  --set-secrets DB_PASSWORD=snagwalk-db-password:latest \
+  --set-env-vars GOOGLE_CLOUD_PROJECT=snagwalk-515212,GCS_BUCKET_NAME=snagwalk-photos-515212,VERTEX_AI_LOCATION=asia-south1,GEMINI_MODEL=gemini-3.5-flash,GEMINI_THINKING=low,DATA_STORE=firestore \
   --allow-unauthenticated --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3
 pnpm release:hosting      # re-release Firebase Hosting so the CDN drops the previous revision's pages
 ```
 
-Service account `snagwalk-run` holds `roles/aiplatform.user`, `roles/alloydb.client`,
-`roles/serviceusage.serviceUsageConsumer`, `roles/storage.objectAdmin` on the bucket and
-`roles/secretmanager.secretAccessor` on `snagwalk-db-password`. No VPC connector is required.
+Service account `snagwalk-run` holds `roles/aiplatform.user`, `roles/datastore.user`,
+`roles/serviceusage.serviceUsageConsumer` and `roles/storage.objectAdmin` on the bucket. No secrets, no VPC.
 
 ## Guardrails
 
-See `.agents/skills/snagwalk-guardrails/SKILL.md`: snake_case tables with uuid ids, parameterized SQL, no
-DROP or TRUNCATE (enforced and tested), photos only in Cloud Storage, fixed category and severity enums
+See `.agents/skills/snagwalk-guardrails/SKILL.md`: snake_case collections with uuid ids, all access through
+the typed data layer, no bulk deletes, photos only in Cloud Storage, fixed category and severity enums
 (enforced on model output), letters that never invent defects or facts, one primary action per screen.

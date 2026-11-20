@@ -21,16 +21,14 @@ flowchart LR
   end
 
   subgraph Data["Data"]
-    ADB[("AlloyDB Express<br/>PostgreSQL 18<br/>walks, rooms, snags")]
+    FS[("Firestore (Native)<br/>walks, rooms, snags")]
     GCS[("Cloud Storage<br/>private photo bucket")]
-    SM["Secret Manager<br/>DB password"]
   end
 
   UI -->|HTTPS| CDN --> APP
   APP -->|"@google/genai, ADC"| GEM
-  APP -->|"mTLS :5433 via in-repo connector"| ADB
-  APP -->|signed SA access| GCS
-  SM -.->|mounted env| APP
+  APP -->|"typed data layer, IAM"| FS
+  APP -->|"service account"| GCS
   UI -->|"/api/photos proxy"| APP
 ```
 
@@ -68,31 +66,33 @@ rolls a new revision, and `pnpm release:hosting` re-releases Firebase Hosting so
 | Gemini 3.5 Flash in `asia-south1`, low thinking, medium media resolution | Measured ~4.6 s per photo, steady across runs. Gemini 3.8 Flash and Gemini 4 models are served only from `global` here and were slower (8-21 s) in the same test. The buyer is standing in the flat, so latency wins. |
 | Structured output + server-side normalisation | Schema constraints make Gemini reliable; normalisation makes the database and UI safe even when it is not. |
 | Letter grounded only in the snags table, fingerprinted | A legal-style notice must not cite a defect that does not exist or was deleted. Staleness is detected, not guessed. |
-| Hand-written AlloyDB connector (`src/lib/alloydb-connector.ts`) | No Node.js AlloyDB connector exists on npm. The module implements the Auth Proxy protocol (Admin API client certificate, mutual TLS on 5433, metadata exchange), so the app reaches AlloyDB Express from Cloud Run or a laptop with IAM and no VPC connector. |
+| Firestore instead of a SQL database | Serverless and inside the free tier at this scale, no instances to keep running, no passwords (the service account authenticates through IAM). The project first ran on AlloyDB Express, reached through a hand-written Node.js connector; when event billing lapsed the Express instance was removed permanently, while Firestore data survives a lapse. All access goes through one typed interface (`src/lib/store.ts`) with a Firestore backend and a local JSON backend, so the switch touched no UI code. |
 | Private bucket + same-origin photo proxy | Photos are personal. The proxy also keeps the PDF canvas untainted for export. |
 | Honest fallbacks | Every AI result carries `source: 'gemini' \| 'fallback'`; the UI labels fallbacks. Production disables the local DB and storage fallbacks so failures are visible, not silent. |
 | Process-wide state on `globalThis` | Next.js loads library modules per route bundle; the pool, circuit breaker and AI status must be shared. |
-| Guardrails as an Agent Skill | `.agents/skills/snagwalk-guardrails/SKILL.md` holds the database, Gemini and letter rules that both the coding agent and the code follow. The SQL guard and output normalisation enforce them at runtime and are unit tested. |
+| Guardrails as an Agent Skill | `.agents/skills/snagwalk-guardrails/SKILL.md` holds the database, Gemini and letter rules that both the coding agent and the code follow. The typed data layer and output normalisation enforce them at runtime and are unit tested. |
 
-## Data model (AlloyDB)
+## Data model (Firestore)
 
 ```
-walks  (id uuid pk, buyer_name, builder_name, project_name, tower, flat_number, bhk smallint,
-        possession_date date, letter_text, created_at)
-rooms  (id uuid pk, walk_id -> walks ON DELETE CASCADE, room_type, checklist jsonb, status, created_at)
-snags  (id uuid pk, walk_id -> walks, room_id -> rooms ON DELETE CASCADE, photo_url, category,
-        severity CHECK (minor|major|critical), description, location_note, created_at)
+walks/{uuid}  buyer_name, builder_name, project_name, tower, flat_number, bhk, possession_date,
+              letter_text, created_at
+rooms/{uuid}  walk_id, room_type, status, checklist[], created_at
+snags/{uuid}  walk_id, room_id, category, severity (minor|major|critical), description,
+              location_note, photo_url, created_at
 ```
 
-Photos live in Cloud Storage; only the URL is stored. All SQL is parameterized; `DROP` and `TRUNCATE` are
-rejected before any query runs.
+Top-level collections keyed by uuid; route params are uuid-validated before any read. A walk and its rooms
+are written in one atomic batch. List queries filter on a single field and sort in memory, so no composite
+indexes are needed. Photos live in Cloud Storage; only the URL is stored. The data layer exposes
+single-document deletes only.
 
 ## Scaling
 
 - Cloud Run scales from zero to `--max-instances` on request concurrency; the app is stateless apart from the
   database and bucket.
-- AlloyDB connections are pooled (max 5 per instance); the connector caches its client certificate and
-  refreshes it 5 minutes before expiry.
+- Firestore scales automatically with no capacity planning; reads per screen are bounded (one walk, its rooms,
+  its snags), and the free tier (50k reads, 20k writes per day) covers hundreds of inspections a day.
 - Gemini calls are per user action (one per checklist, photo or letter). Measured cost of a real two-room run:
   6 calls, about $0.05. A full 3 BHK inspection is roughly $0.25 of AI cost.
 
@@ -100,6 +100,6 @@ rejected before any query runs.
 
 | Layer | What | Command |
 | --- | --- | --- |
-| Unit (Vitest, 64 tests) | page breaks, SQL guard, Gemini output normalisation, fallback letter invariants, letter fingerprint and marker, connector protobuf, room provisioning, formatting | `pnpm test` |
-| End to end (19 checks) | walk, rooms, checklist, photo analysis, photo proxy, edit validation, letter, stale detection, delete, against a running server with real Gemini, AlloyDB and Cloud Storage | `pnpm smoke <url> <photo.jpg>` |
+| Unit (Vitest, 54 tests) | page breaks, Gemini output normalisation, fallback letter invariants, letter fingerprint and marker, data layer contract, photo numbering, room provisioning, formatting | `pnpm test` |
+| End to end (19 checks) | walk, rooms, checklist, photo analysis, photo proxy, edit validation, letter, stale detection, delete, against a running server with real Gemini, Firestore and Cloud Storage | `pnpm smoke <url> <photo.jpg>` |
 | CI | typecheck, lint, unit tests, build on every push | `.github/workflows/ci.yml` |

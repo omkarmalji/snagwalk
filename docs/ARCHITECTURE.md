@@ -18,6 +18,11 @@ flowchart LR
 
   subgraph AI["Vertex AI (asia-south1)"]
     GEM["Gemini 3.5 Flash<br/>structured JSON, vision"]
+    LIVEM["Gemini Live 3.8<br/>audio + video, tools"]
+  end
+
+  subgraph RunLive["Cloud Run (asia-southeast1)"]
+    RELAY["snagwalk-live<br/>WebSocket relay"]
   end
 
   subgraph Data["Data"]
@@ -30,6 +35,8 @@ flowchart LR
   APP -->|"typed data layer, IAM"| FS
   APP -->|"service account"| GCS
   UI -->|"/api/photos proxy"| APP
+  UI <-->|"WebSocket: PCM audio, 1 fps JPEG"| RELAY
+  RELAY <-->|"Live API session"| LIVEM
 ```
 
 Build and release: Cloud Build (Dockerfile, multi-stage) pushes to Artifact Registry, `gcloud run deploy`
@@ -47,6 +54,18 @@ rolls a new revision, and `pnpm release:hosting` re-releases Firebase Hosting so
    is inserted with these values.
 4. The UI draws `box_2d` on the photo and shows the fields for review. The buyer corrects them
    (`PUT /api/snags/[snagId]`, validated against the enums) or discards the snag (`DELETE`).
+
+### Inspect live (Gemini Live)
+
+1. The page opens a WebSocket to the `snagwalk-live` relay (URL from `GET /api/live/config`; the feature hides when
+   unset). The relay checks the Origin header, caps sessions at 5 minutes and opens a Gemini Live session on Vertex
+   with a room-specific system prompt and one tool, `log_snag(description, category, severity)`.
+2. The browser streams mic audio (AudioWorklet, resampled to 16 kHz PCM16, 100 ms chunks) and one 640 px JPEG frame
+   per second, and plays Gemini's 24 kHz speech. The mic is gated while Gemini talks so a phone speaker cannot
+   interrupt it; quick-question chips cover noisy rooms.
+3. On `log_snag` the relay answers the tool call at once and tells the browser, which captures a sharp 1600 px frame
+   and posts it, with Gemini Live's one-line note, to the normal `POST /api/rooms/[roomId]/snags`. The relay never
+   touches the database, so live snags get the same storage, validation, classification and bounding box.
 
 ### Write the builder letter
 

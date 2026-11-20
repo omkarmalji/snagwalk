@@ -6,9 +6,11 @@ On possession day a buyer gets minutes to check a flat the builder has had years
 flat with them room by room: Gemini writes a checklist for each room, classifies every defect from a photo,
 and drafts the formal snag letter the builder must answer, in English, Hindi or Marathi.
 
-**Live:** https://snagwalk-app.web.app (mobile first; works on any phone browser, no install)
+**Live:** https://snagwalk-app.web.app (mobile first; works on any phone browser, no install).
+**No flat handy?** Tap "Watch it work" on the home page (`/demo`): the app runs a full inspection by itself with real
+Gemini calls on real defect photos, in about 35 seconds, and leaves you a saved walk to explore.
 
-Built on Gemini 3.5 Flash (Vertex AI), Firestore, Cloud Storage, Cloud Run and Firebase Hosting.
+Built on Gemini 3.5 Flash and Gemini Live (Vertex AI), Firestore, Cloud Storage, Cloud Run and Firebase Hosting.
 Architecture, request flows and design decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## The problem
@@ -25,6 +27,7 @@ Architecture, request flows and design decisions: [docs/ARCHITECTURE.md](docs/AR
 | --- | --- | --- |
 | Start a walk | `/` | Rooms are provisioned from the BHK (bedrooms, bathrooms, balcony, utility). |
 | Rooms | `/walks/[walkId]` | Writes a 4-6 item checklist per room: tile slope in bathrooms, socket earthing, door alignment. |
+| Live inspector | `/walks/[walkId]/rooms/[roomId]/live` | **Gemini Live** watches the camera (1 frame/s), listens, talks the buyer through the room in English, Hindi or Marathi, and calls a `log_snag` tool when it sees a defect. A sharp frame is then saved through the normal snag route. |
 | Snag capture | `/walks/[walkId]/rooms/[roomId]/snag` | Reads the photo and returns category, severity, description, location and a bounding box drawn on the photo. The buyer corrects or discards it. |
 | Builder letter | `/walks/[walkId]/letter` | Drafts the formal notice from the recorded snags only: grouped by room, photo references, 15-day deadline, written confirmation, RERA 14(3) clause. English, Hindi or Marathi. PDF with photo annexure, WhatsApp share, copy. |
 
@@ -36,6 +39,7 @@ marked stale and regenerated, so it never cites a defect that does not exist.
 | Product | How SnagWalk uses it |
 | --- | --- |
 | **Gemini 3.5 Flash on Vertex AI** | Three distinct tasks through `@google/genai`: vision defect classification with bounding boxes, room checklist generation, and multilingual legal-style letter drafting. Structured JSON output with enum-constrained `responseSchema`, low thinking level and medium media resolution (~4.6 s per photo from `asia-south1`). |
+| **Gemini Live (`gemini-3.8-live`, Vertex AI)** | Real-time voice + video inspector with function calling. Runs in a separate Cloud Run WebSocket relay (`live/`), because Next.js routes and Firebase Hosting cannot hold WebSockets. Origin-checked, 5-minute session cap, about $0.15-0.50 per session. |
 | **Firestore (Native mode)** | Walks, rooms and snags. Serverless, inside the free tier at this scale, IAM auth through the Cloud Run service account (no passwords), atomic batch write for a walk and its rooms. |
 | **Cloud Storage** | Private photo bucket, served through a same-origin proxy (also keeps the PDF canvas untainted). |
 | **Cloud Run** | Stateless Next.js standalone service, scales to zero, dedicated least-privilege service account. |
@@ -43,7 +47,8 @@ marked stale and regenerated, so it never cites a defect that does not exist.
 | **Firebase Hosting** | Public URL and CDN in front of Cloud Run. |
 | **Agent Skills** | `.agents/skills/snagwalk-guardrails/SKILL.md`: database, Gemini and letter rules shared by the coding agent and enforced in code. |
 
-Every AI result carries `source: 'gemini' | 'fallback'` and the UI labels fallbacks honestly.
+Every AI result carries `source: 'gemini' | 'fallback'` and the UI labels fallbacks honestly. Quota and overload
+errors (429/503) are retried with backoff, then once on the `global` endpoint (a separate quota pool).
 `GET /api/health` reports which model, auth mode, database and storage are live; the header shows it.
 
 **Cost:** a real two-room inspection made 6 Gemini calls for about $0.05. A full 3 BHK walk is roughly
@@ -97,6 +102,12 @@ gcloud run deploy snagwalk --region asia-southeast1 \
   --set-env-vars GOOGLE_CLOUD_PROJECT=snagwalk-515212,GCS_BUCKET_NAME=snagwalk-photos-515212,VERTEX_AI_LOCATION=asia-south1,GEMINI_MODEL=gemini-3.5-flash,GEMINI_THINKING=low,DATA_STORE=firestore \
   --allow-unauthenticated --memory 1Gi --cpu 1 --min-instances 0 --max-instances 3
 pnpm release:hosting      # re-release Firebase Hosting so the CDN drops the previous revision's pages
+```
+
+Live inspector relay (separate service; then point the app at it with `--update-env-vars LIVE_URL=wss://<relay>/ws`):
+
+```bash
+gcloud run deploy snagwalk-live --source live --region asia-southeast1   --service-account snagwalk-run@snagwalk-515212.iam.gserviceaccount.com --allow-unauthenticated   --timeout 3600 --max-instances 2 --concurrency 20   --set-env-vars GOOGLE_CLOUD_PROJECT=snagwalk-515212,LIVE_MODEL=gemini-3.8-live,LIVE_LOCATION=asia-south1
 ```
 
 Service account `snagwalk-run` holds `roles/aiplatform.user`, `roles/datastore.user`,

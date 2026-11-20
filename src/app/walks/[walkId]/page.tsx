@@ -19,6 +19,7 @@ import {
   WarningCircle,
   WashingMachine,
   type Icon,
+  Waveform,
 } from '@phosphor-icons/react';
 import AppHeader from '@/components/AppHeader';
 import { Button, ButtonLink, Card, Skeleton, SourceTag, cn } from '@/components/ui';
@@ -81,6 +82,13 @@ export default function WalkPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [loadingChecklist, setLoadingChecklist] = useState<string | null>(null);
   const [checklistSource, setChecklistSource] = useState<Record<string, string>>({});
+  const [liveEnabled, setLiveEnabled] = useState(false);
+
+  useEffect(() => {
+    api<{ url: string | null }>('/api/live/config')
+      .then((c) => setLiveEnabled(Boolean(c.url)))
+      .catch(() => setLiveEnabled(false));
+  }, []);
 
   const load = useCallback(async () => {
     setError(null);
@@ -252,6 +260,7 @@ export default function WalkPage() {
                     onToggleItem={(itemId) => toggleItem(room.id, itemId)}
                     onRegenerate={() => fetchChecklist(room.id, true)}
                     onCapture={() => router.push(`/walks/${walkId}/rooms/${room.id}/snag`)}
+                    onLive={liveEnabled ? () => router.push(`/walks/${walkId}/rooms/${room.id}/live`) : undefined}
                   />
                 ))}
                 <AddRoom
@@ -341,6 +350,7 @@ function RoomRow({
   onToggleItem,
   onRegenerate,
   onCapture,
+  onLive,
 }: {
   room: Room;
   open: boolean;
@@ -350,6 +360,7 @@ function RoomRow({
   onToggleItem: (id: string) => void;
   onRegenerate: () => void;
   onCapture: () => void;
+  onLive?: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<SVGSVGElement>(null);
@@ -494,10 +505,18 @@ function RoomRow({
               </ul>
             )}
 
-            <Button variant="ink" size="lg" onClick={onCapture} className="mt-4 w-full">
-              <Camera className="size-5" weight="bold" />
-              Photograph a defect
-            </Button>
+            <div className={cn('mt-4 grid gap-2.5', onLive && 'sm:grid-cols-2')}>
+              <Button variant="ink" size="lg" onClick={onCapture} className="w-full">
+                <Camera className="size-5" weight="bold" />
+                Photograph a defect
+              </Button>
+              {onLive && (
+                <Button variant="primary" size="lg" onClick={onLive} className="w-full">
+                  <Waveform className="size-5" weight="bold" />
+                  Inspect live with Gemini
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </Card>

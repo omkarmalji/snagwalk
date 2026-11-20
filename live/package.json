@@ -1,0 +1,12 @@
+{
+  "name": "snagwalk-live",
+  "private": true,
+  "type": "module",
+  "description": "WebSocket relay between the SnagWalk browser client and Gemini Live on Vertex AI",
+  "scripts": { "start": "node server.mjs" },
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@google/genai": "3.6.1",
+    "ws": "^8.18.0"
+  }
+}

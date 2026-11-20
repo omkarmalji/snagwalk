@@ -3,8 +3,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, CalendarBlank, Camera, FileText, ListChecks, CaretRight, Play } from '@phosphor-icons/react';
+import {
+  ArrowRight,
+  CalendarBlank,
+  Camera,
+  CaretRight,
+  Cloud,
+  Cpu,
+  Database,
+  FileText,
+  Globe,
+  Hammer,
+  ImageSquare,
+  ListChecks,
+  Play,
+  Waveform,
+} from '@phosphor-icons/react';
 import AppHeader from '@/components/AppHeader';
+import { GeminiSpark } from '@/components/GeminiSpark';
 import { Button, ButtonLink, Card, cn } from '@/components/ui';
 import { api, formatDate, jsonInit, knownWalkIds, rememberWalk } from '@/lib/client';
 import { useReveal } from '@/lib/motion';
@@ -26,12 +42,13 @@ interface WalkSummary {
 
 type FormKey = 'buyer_name' | 'builder' | 'project' | 'tower' | 'flat_number';
 
-const FIELDS: Array<{ key: FormKey; label: string; placeholder: string; autoComplete?: string }> = [
+// `half` fields share a row on phones too; the rest take the full width below 640px so nothing is cramped.
+const FIELDS: Array<{ key: FormKey; label: string; placeholder: string; autoComplete?: string; half?: boolean }> = [
   { key: 'buyer_name', label: 'Your name', placeholder: 'Ananya Iyer', autoComplete: 'name' },
   { key: 'builder', label: 'Builder', placeholder: 'Skyline Developers' },
   { key: 'project', label: 'Project', placeholder: 'Palm Grove Residency' },
-  { key: 'tower', label: 'Tower or wing', placeholder: 'Tower 7' },
-  { key: 'flat_number', label: 'Flat number', placeholder: '1402' },
+  { key: 'tower', label: 'Tower or wing', placeholder: 'Tower 7', half: true },
+  { key: 'flat_number', label: 'Flat number', placeholder: '1402', half: true },
 ];
 
 const STEPS = [
@@ -57,6 +74,18 @@ const FEATURES = [
     body: 'Defects grouped by room with photo references, a 15-day deadline and a request for written confirmation.',
   },
 ];
+
+/** Every Google service the live app runs on. Keep in sync with docs/ARCHITECTURE.md. */
+const GOOGLE_STACK = [
+  { icon: null, name: 'Gemini 3.5 Flash', role: 'Reads defect photos, writes checklists and the letter' },
+  { icon: Waveform, name: 'Gemini Live', role: 'Talks you through a room over live camera and voice' },
+  { icon: Cpu, name: 'Vertex AI', role: 'Serves Gemini from Mumbai, asia-south1' },
+  { icon: Cloud, name: 'Cloud Run', role: 'Runs the app and the Live relay' },
+  { icon: Database, name: 'Cloud Firestore', role: 'Stores walks, rooms and snags' },
+  { icon: ImageSquare, name: 'Cloud Storage', role: 'Keeps every defect photo' },
+  { icon: Globe, name: 'Firebase Hosting', role: 'Serves snagwalk-app.web.app' },
+  { icon: Hammer, name: 'Cloud Build', role: 'Builds every release' },
+] as const;
 
 export default function HomePage() {
   const router = useRouter();
@@ -127,6 +156,14 @@ export default function HomePage() {
         {/* Above the fold: headline and the whole form in one viewport, on a phone and on a laptop. */}
         <div className="grid gap-x-14 gap-y-4 pt-4 sm:gap-y-8 sm:pt-8 lg:min-h-[calc(100dvh-4rem)] lg:grid-cols-12 lg:items-center lg:py-8">
           <section className="lg:col-span-6">
+            <a
+              data-reveal
+              href="#stack-title"
+              className="mb-4 inline-flex items-center gap-2 rounded-full border border-white/10 bg-surface/50 py-1.5 pl-2.5 pr-3.5 text-[12.5px] font-medium text-ink-2 backdrop-blur-xl transition-colors hover:text-ink sm:mb-6"
+            >
+              <GeminiSpark active className="size-3.5" />
+              Powered by Google Gemini, on Google Cloud
+            </a>
             <h1
               data-reveal
               className="max-w-[15ch] text-[clamp(1.85rem,5.4vw,4rem)] font-semibold leading-[1.02] tracking-[-0.035em]"
@@ -167,7 +204,7 @@ export default function HomePage() {
 
               <form onSubmit={submit} noValidate className="grid grid-cols-2 gap-x-3 gap-y-3 sm:mt-5 sm:gap-y-4">
                 {FIELDS.map((f) => (
-                  <div key={f.key} className="min-w-0">
+                  <div key={f.key} className={cn('min-w-0', !f.half && 'col-span-2 sm:col-span-1')}>
                     <label htmlFor={f.key} className="label">
                       {f.label}
                     </label>
@@ -192,7 +229,7 @@ export default function HomePage() {
                   </div>
                 ))}
 
-                <div className="min-w-0">
+                <div className="col-span-2 min-w-0 sm:col-span-1">
                   <label htmlFor="date" className="label">
                     Inspection date
                   </label>
@@ -204,6 +241,13 @@ export default function HomePage() {
                       value={date}
                       onChange={(e) => setDate(e.target.value)}
                     />
+                    {/* The native value is hidden (iOS Safari mis-aligns it); this label shows the date the same way everywhere. */}
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-y-0 left-3.5 right-10 flex items-center truncate text-[15px] text-ink"
+                    >
+                      {date ? formatDate(date) : 'Pick a date'}
+                    </span>
                     <CalendarBlank
                       className="pointer-events-none absolute right-3 top-1/2 size-5 -translate-y-1/2 text-ink-3"
                       aria-hidden
@@ -290,6 +334,39 @@ export default function HomePage() {
             </li>
           ))}
         </ul>
+
+        <section
+          data-reveal
+          aria-labelledby="stack-title"
+          className="mt-14 rounded-card border border-white/10 bg-surface/60 p-5 backdrop-blur-xl sm:p-7"
+        >
+          <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+            <div>
+              <h2 id="stack-title" className="flex items-center gap-2.5 text-[19px] font-semibold tracking-tight">
+                <GeminiSpark active className="size-5" />
+                Built on Google Cloud
+              </h2>
+              <p className="mt-1 text-[14px] text-ink-2">The AI, the servers and your data all run on Google.</p>
+            </div>
+            <span className="tabular text-[13px] text-ink-3">{GOOGLE_STACK.length} Google services</span>
+          </div>
+          <ul className="mt-5 grid grid-cols-1 gap-2.5 min-[420px]:grid-cols-2 lg:grid-cols-4">
+            {GOOGLE_STACK.map(({ icon: Icon, name, role }) => (
+              <li
+                key={name}
+                className="flex items-start gap-3 rounded-field border border-white/[0.06] bg-surface-2/50 px-3.5 py-3"
+              >
+                <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-accent-soft text-accent">
+                  {Icon ? <Icon className="size-4" weight="duotone" /> : <GeminiSpark active className="size-3.5" />}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[14px] font-semibold">{name}</span>
+                  <span className="block text-[12.5px] leading-snug text-ink-2">{role}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
       </main>
     </div>
   );

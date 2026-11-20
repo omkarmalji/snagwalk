@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ArrowLeft } from '@phosphor-icons/react';
 import { cn } from '@/components/ui';
 import BrandLogo from '@/components/BrandLogo';
+import { GeminiSpark } from '@/components/GeminiSpark';
 
 interface Health {
   ai: { live: boolean; model: string; lastError: string | null; lastOk: string | null };
@@ -43,11 +44,12 @@ function SystemStatus() {
       title={title}
       className="hidden items-center gap-2 rounded-full border border-line px-3 py-1.5 text-[12px] font-medium text-ink-2 sm:inline-flex"
     >
+      <GeminiSpark className="size-3.5" />
+      {label}
       <span
         className={cn('size-1.5 rounded-full', !aiKnown ? 'bg-ink-3' : aiOk ? 'bg-ok' : 'bg-major')}
         aria-hidden
       />
-      {label}
       {localDb && <span className="text-ink-3">Local DB</span>}
     </span>
   );

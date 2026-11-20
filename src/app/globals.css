@@ -114,6 +114,9 @@ input[type='date'].date-field {
   max-width: 100%;
   line-height: normal;
   text-align: left;
+  /* Value is drawn by an overlay label (page.tsx); keep the native control for the picker and accessibility. */
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 input[type='date'].date-field::-webkit-date-and-time-value {
   margin: 0;
@@ -209,6 +212,73 @@ input[type='date'].date-field::-webkit-calendar-picker-indicator {
 @keyframes page-enter {
   from {
     opacity: 0;
+  }
+}
+
+/* Gemini working signal (components/GeminiSpark.tsx). Accent blue only; animated only without reduced motion. */
+.gemini-spark {
+  color: rgb(var(--accent));
+}
+.gemini-spark-mini {
+  opacity: 0.55;
+}
+.gemini-shimmer {
+  color: rgb(var(--ink-2));
+}
+@media (prefers-reduced-motion: no-preference) {
+  .gemini-spark.is-active {
+    filter: drop-shadow(0 0 6px rgb(var(--accent) / 0.45));
+  }
+  .gemini-spark.is-active .gemini-spark-main {
+    animation: spark-turn 2.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  }
+  .gemini-spark.is-active .gemini-spark-mini {
+    animation: spark-twinkle 2.4s ease-in-out infinite;
+  }
+  .gemini-shimmer {
+    background: linear-gradient(
+        100deg,
+        rgb(var(--ink-2)) 0%,
+        rgb(var(--ink-2)) 35%,
+        rgb(var(--accent)) 50%,
+        rgb(var(--ink-2)) 65%,
+        rgb(var(--ink-2)) 100%
+      )
+      0 0 / 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: text-sweep 2.4s linear infinite;
+  }
+}
+@keyframes spark-turn {
+  0% {
+    transform: rotate(0deg) scale(0.82);
+  }
+  50% {
+    transform: rotate(90deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(180deg) scale(0.82);
+  }
+}
+@keyframes spark-twinkle {
+  0%,
+  100% {
+    opacity: 0.15;
+    transform: scale(0.5);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes text-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
   }
 }
 

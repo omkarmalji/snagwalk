@@ -11,10 +11,10 @@ import {
   Copy,
   DownloadSimple,
   ShareNetwork,
-  Sparkle,
   WarningCircle,
 } from '@phosphor-icons/react';
 import AppHeader from '@/components/AppHeader';
+import { GeminiWorking } from '@/components/GeminiSpark';
 import { Button, Card, SeverityBadge, Skeleton, SourceTag, cn } from '@/components/ui';
 import { api, formatDate, jsonInit, toWhatsAppText } from '@/lib/client';
 import { gsap, useGSAP, useReveal, prefersReducedMotion, EASE } from '@/lib/motion';
@@ -437,10 +437,9 @@ function PaperSkeleton({ count, generating }: { count: number; generating: boole
   return (
     <div aria-label="Drafting letter">
       {generating && (
-        <p className="mb-6 flex items-center gap-2 text-[14px] font-medium text-ink-2">
-          <Sparkle className="size-4 animate-pulse text-accent" weight="fill" />
-          Gemini is drafting your letter{count ? ` from ${count} ${count === 1 ? 'snag' : 'snags'}` : ''}
-        </p>
+        <GeminiWorking className="mb-6">
+          Gemini 3.5 Flash is drafting your letter{count ? ` from ${count} ${count === 1 ? 'snag' : 'snags'}` : ''}
+        </GeminiWorking>
       )}
       <Skeleton className="h-3 w-28" />
       <Skeleton className="mt-6 h-3 w-48" />

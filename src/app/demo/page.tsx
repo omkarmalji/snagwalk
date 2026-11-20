@@ -14,10 +14,10 @@ import {
   ListChecks,
   Pause,
   Play,
-  Sparkle,
   WarningCircle,
 } from '@phosphor-icons/react';
 import AppHeader from '@/components/AppHeader';
+import { GeminiSpark, GeminiWorking } from '@/components/GeminiSpark';
 import { ButtonLink, Button, Card, SeverityBadge, SourceTag, cn } from '@/components/ui';
 import { api, jsonInit, rememberWalk } from '@/lib/client';
 import { categoryLabel } from '@/lib/shared';
@@ -324,7 +324,7 @@ export default function DemoPage() {
                 </span>
               ) : (
                 <span className="flex items-start gap-2">
-                  <Sparkle className="mt-0.5 size-4 shrink-0 text-accent" weight="fill" />
+                  <GeminiSpark active={!ready} className="mt-0.5 size-4" />
                   {caption}
                 </span>
               )}
@@ -450,7 +450,8 @@ export default function DemoPage() {
             )}
 
             <p className="mt-6 text-[12px] text-ink-3">
-              Every result above is computed live by Gemini 3.5 Flash and saved to Firestore. Photo sources:{' '}
+              Every result above is computed live by Gemini 3.5 Flash on Vertex AI and saved to Cloud Firestore. Photo
+              sources:{' '}
               <a href="/demo/CREDITS.md" className="underline">
                 credits
               </a>
@@ -536,9 +537,7 @@ function PhotoStage({ room, src, caption, result }: { room: string; src: string;
       <Card className="p-5 sm:col-span-2">
         {!result ? (
           <div className="grid gap-3">
-            <p className="flex items-center gap-2 text-[14px] font-medium text-ink-2">
-              <Sparkle className="size-4 animate-pulse text-accent" weight="fill" /> Gemini is classifying
-            </p>
+            <GeminiWorking>Gemini 3.5 Flash is classifying</GeminiWorking>
             <div className="skeleton h-6 w-24 rounded-full" />
             <div className="skeleton h-4 w-full rounded-field" />
             <div className="skeleton h-4 w-4/5 rounded-field" />
@@ -565,9 +564,13 @@ function PhotoStage({ room, src, caption, result }: { room: string; src: string;
 function StageSkeleton({ label, bare }: { label: string; bare?: boolean }) {
   const body = (
     <div className="grid gap-3" aria-label={label}>
-      <p className="flex items-center gap-2 text-[14px] font-medium text-ink-2">
-        <CircleNotch className="size-4 animate-spin text-accent" weight="bold" /> {label}
-      </p>
+      {label.startsWith('Gemini') ? (
+        <GeminiWorking>{label}</GeminiWorking>
+      ) : (
+        <p className="flex items-center gap-2 text-[14px] font-medium text-ink-2">
+          <CircleNotch className="size-4 animate-spin text-accent" weight="bold" /> {label}
+        </p>
+      )}
       {[0, 1, 2, 3].map((i) => (
         <div key={i} className="skeleton h-11 rounded-field" style={{ width: `${100 - i * 9}%` }} />
       ))}

@@ -10,10 +10,10 @@ import {
   ImageSquare,
   PencilSimple,
   Trash,
-  Sparkle,
   X,
 } from '@phosphor-icons/react';
 import AppHeader from '@/components/AppHeader';
+import { GeminiSpark } from '@/components/GeminiSpark';
 import { Button, ButtonLink, Card, SeverityBadge, Skeleton, SourceTag, cn } from '@/components/ui';
 import { api, compressImage, jsonInit } from '@/lib/client';
 import { gsap, useGSAP, useReveal, prefersReducedMotion, EASE } from '@/lib/motion';
@@ -265,9 +265,9 @@ export default function SnagCapturePage() {
                 />
                 {phase === 'analyzing' && (
                   <div className="flex items-center gap-3 px-5 py-4">
-                    <Sparkle className="size-5 animate-pulse text-accent" weight="fill" />
+                    <GeminiSpark active className="size-5" />
                     <div>
-                      <p className="text-[15px] font-medium">Gemini is inspecting the photo</p>
+                      <p className="gemini-shimmer text-[15px] font-medium">Gemini 3.5 Flash is inspecting the photo</p>
                       <p className="text-[13px] text-ink-2">Classifying category and severity while the photo uploads</p>
                     </div>
                   </div>

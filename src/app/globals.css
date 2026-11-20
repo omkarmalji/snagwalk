@@ -164,6 +164,61 @@ input[type='date'].date-field::-webkit-calendar-picker-indicator {
   background: rgb(var(--surface));
 }
 
+/* Guided demo (/demo). */
+@media (prefers-reduced-motion: no-preference) {
+  .demo-in {
+    animation: demo-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .demo-scan {
+    animation: demo-scan 1.6s ease-in-out infinite alternate;
+  }
+  .demo-box {
+    animation: demo-box 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+.demo-scan {
+  top: 0;
+}
+@keyframes demo-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+@keyframes demo-scan {
+  from {
+    top: -10%;
+  }
+  to {
+    top: 90%;
+  }
+}
+@keyframes demo-box {
+  from {
+    opacity: 0;
+    transform: scale(1.15);
+  }
+}
+.demo-letter h1,
+.demo-letter h2,
+.demo-letter h3 {
+  margin: 1.1em 0 0.4em;
+  font-weight: 600;
+}
+.demo-letter p,
+.demo-letter ul,
+.demo-letter ol {
+  margin: 0 0 0.75em;
+}
+.demo-letter ul {
+  padding-left: 1.2em;
+  list-style: disc;
+}
+.demo-letter ol {
+  padding-left: 1.2em;
+  list-style: decimal;
+}
+
 @media print {
   body {
     background: white !important;

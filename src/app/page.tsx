@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, CalendarBlank, Camera, FileText, ListChecks, CaretRight } from '@phosphor-icons/react';
+import { ArrowRight, CalendarBlank, Camera, FileText, ListChecks, CaretRight, Play } from '@phosphor-icons/react';
 import AppHeader from '@/components/AppHeader';
-import { Button, Card, cn } from '@/components/ui';
+import { Button, ButtonLink, Card, cn } from '@/components/ui';
 import { api, formatDate, jsonInit, knownWalkIds, rememberWalk } from '@/lib/client';
 import { useReveal } from '@/lib/motion';
 import { BHK_OPTIONS, defaultRoomsFor } from '@/lib/shared';
@@ -26,8 +26,8 @@ type FormKey = 'buyer_name' | 'builder' | 'project' | 'tower' | 'flat_number';
 
 const FIELDS: Array<{ key: FormKey; label: string; placeholder: string; autoComplete?: string }> = [
   { key: 'buyer_name', label: 'Your name', placeholder: 'Ananya Iyer', autoComplete: 'name' },
-  { key: 'builder', label: 'Builder', placeholder: 'Sobha Ltd' },
-  { key: 'project', label: 'Project', placeholder: 'Dream Acres' },
+  { key: 'builder', label: 'Builder', placeholder: 'Skyline Developers' },
+  { key: 'project', label: 'Project', placeholder: 'Palm Grove Residency' },
   { key: 'tower', label: 'Tower or wing', placeholder: 'Tower 7' },
   { key: 'flat_number', label: 'Flat number', placeholder: '1402' },
 ];
@@ -141,6 +141,15 @@ export default function HomePage() {
                 </li>
               ))}
             </ol>
+            <div data-reveal className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 sm:mt-8">
+              <ButtonLink href="/demo" variant="ink" size="md" className="gap-2.5 pl-2">
+                <span className="grid size-7 place-items-center rounded-full bg-bg/15">
+                  <Play className="size-3.5" weight="fill" />
+                </span>
+                Watch it work, 60 seconds
+              </ButtonLink>
+              <span className="text-[13px] text-ink-3">No flat needed. Real Gemini, real photos.</span>
+            </div>
           </section>
 
           <section className="lg:col-span-6">

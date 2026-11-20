@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { gsap } from '@/lib/motion';
 import { NebulaBackground, type NeuformCraftEffectProps } from './NeuformCraftEffects';
 
 /**
@@ -11,6 +12,7 @@ import { NebulaBackground, type NeuformCraftEffectProps } from './NeuformCraftEf
  * - a sized, overflow-controlled parent (`.threeui-background`)
  * - forwarding pointer positions into the sandboxed frame, so the authored pointer drift works behind content
  * - prefers-reduced-motion: a static frame of the same palette instead of the animated field
+ * - a soft fade-in once the frame has loaded, instead of the field popping in
  */
 export type StructureFlowVariant = 'nebula';
 
@@ -27,6 +29,31 @@ export function StructureFlowCollection({ variant, className, ...props }: Struct
     mq.addEventListener('change', update);
     return () => mq.removeEventListener('change', update);
   }, []);
+
+  // Fade the field in when its document has loaded (scripts from CDN take a moment); 2.5 s safety net.
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    if (reduced) {
+      gsap.set(el, { opacity: 1 });
+      return;
+    }
+    gsap.set(el, { opacity: 0 });
+    let shown = false;
+    const show = () => {
+      if (shown) return;
+      shown = true;
+      gsap.to(el, { opacity: 1, duration: 1.6, ease: 'power2.out' });
+    };
+    const iframe = el.querySelector('iframe');
+    iframe?.addEventListener('load', show, { once: true });
+    const safety = window.setTimeout(show, 2500);
+    return () => {
+      iframe?.removeEventListener('load', show);
+      clearTimeout(safety);
+      gsap.killTweensOf(el);
+    };
+  }, [reduced]);
 
   useEffect(() => {
     if (reduced) return;

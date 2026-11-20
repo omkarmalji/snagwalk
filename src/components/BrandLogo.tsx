@@ -33,8 +33,9 @@ export function LogoMark({ className, title }: { className?: string; title?: str
       aria-hidden={title ? undefined : true}
       aria-label={title}
     >
-      {MARK_RECTS.map(([x, y, w, h]) => (
-        <rect key={`${x}-${y}`} x={x} y={y} width={w} height={h} />
+      {MARK_RECTS.map(([x, y, w, h], i) => (
+        // Static list: the index is a stable key (two rects share an origin, so coordinates are not unique).
+        <rect key={i} x={x} y={y} width={w} height={h} />
       ))}
     </svg>
   );

@@ -30,7 +30,11 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en-IN" className={`${geist.variable} ${geistMono.variable} ${devanagari.variable}`}>
+    <html lang="en-IN" className={`${geist.variable} ${geistMono.variable} ${devanagari.variable}`} suppressHydrationWarning>
+      <head>
+        {/* Marks JS as available before first paint, so reveal targets start hidden instead of flashing. */}
+        <script dangerouslySetInnerHTML={{ __html: "document.documentElement.classList.add('js')" }} />
+      </head>
       <body className="min-h-[100dvh] overflow-x-hidden">{children}</body>
     </html>
   );

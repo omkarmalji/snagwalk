@@ -23,9 +23,16 @@ export function prefersReducedMotion(): boolean {
 export function useReveal(scope: RefObject<HTMLElement | null>, deps: DependencyList = []) {
   useGSAP(
     () => {
-      const els = gsap.utils
-        .toArray<HTMLElement>('[data-reveal]:not([data-revealed])', scope.current)
-        .filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
+      const all = gsap.utils.toArray<HTMLElement>('[data-reveal]:not([data-revealed])', scope.current);
+      const els = all.filter((el) => el.offsetParent !== null || el.getClientRects().length > 0);
+      // Elements not laid out right now (e.g. `hidden sm:block`) are released without animation, so the
+      // pre-paint CSS hide never keeps them invisible if the viewport later shows them.
+      all
+        .filter((el) => !els.includes(el))
+        .forEach((el) => {
+          el.setAttribute('data-revealed', '');
+          gsap.set(el, { autoAlpha: 1 });
+        });
       if (!els.length) return;
       els.forEach((el) => el.setAttribute('data-revealed', ''));
       if (prefersReducedMotion()) {
@@ -34,8 +41,8 @@ export function useReveal(scope: RefObject<HTMLElement | null>, deps: Dependency
       }
       gsap.fromTo(
         els,
-        { autoAlpha: 0, y: 14 },
-        { autoAlpha: 1, y: 0, duration: 0.7, ease: EASE, stagger: 0.05, clearProps: 'transform' }
+        { autoAlpha: 0, y: 18 },
+        { autoAlpha: 1, y: 0, duration: 0.9, ease: EASE, stagger: 0.07, clearProps: 'transform' }
       );
       // On revert (unmount, or StrictMode's dev double-mount) forget the marker so a remount animates again.
       return () => els.forEach((el) => el.removeAttribute('data-revealed'));

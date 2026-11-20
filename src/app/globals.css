@@ -187,6 +187,31 @@ input[type='date'].date-field::-webkit-calendar-picker-indicator {
   background: rgb(var(--surface));
 }
 
+/*
+ * Entrance motion. With JS, [data-reveal] targets are hidden before first paint and GSAP (useReveal) brings them in;
+ * the 2.5 s CSS fallback guarantees nothing stays hidden if scripts fail. Every route fades in on navigation
+ * (app/template.tsx). Opacity only, so fixed backgrounds are not re-anchored.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .js [data-reveal]:not([data-revealed]) {
+    visibility: hidden;
+    animation: reveal-fallback 0s 2.5s forwards;
+  }
+  .page-enter {
+    animation: page-enter 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+}
+@keyframes reveal-fallback {
+  to {
+    visibility: visible;
+  }
+}
+@keyframes page-enter {
+  from {
+    opacity: 0;
+  }
+}
+
 /* Guided demo (/demo). */
 @media (prefers-reduced-motion: no-preference) {
   .demo-in {

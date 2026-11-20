@@ -1,4 +1,5 @@
 import { GoogleGenAI, MediaResolution, ThinkingLevel, Type, type Schema } from '@google/genai';
+import type { LetterLanguage } from '@/lib/shared';
 
 /**
  * Gemini client for SnagWalk.
@@ -161,9 +162,36 @@ async function generate(opts: {
   }
 }
 
-function parseJson<T>(raw: string): T {
+export function parseJson<T>(raw: string): T {
   const cleaned = raw.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(cleaned) as T;
+}
+
+/**
+ * Coerce whatever the model returned into the fixed enums and a valid box. Gemini occasionally wraps the
+ * object in an array or drifts outside the enum; the UI and the database only ever see valid values.
+ */
+export function normalizeSnagAnalysis(value: unknown, roomContext: string): SnagAnalysisResult {
+  const parsed = (Array.isArray(value) ? value[0] : value) as Partial<SnagAnalysisResult> | undefined;
+  const p = parsed && typeof parsed === 'object' ? parsed : {};
+  const category = VALID_CATEGORIES.includes(p.category as SnagCategory) ? (p.category as SnagCategory) : 'other';
+  const severity = VALID_SEVERITIES.includes(p.severity as SnagSeverity) ? (p.severity as SnagSeverity) : 'minor';
+  const b = p.box_2d;
+  const box =
+    Array.isArray(b) &&
+    b.length === 4 &&
+    b.every((n) => typeof n === 'number' && n >= 0 && n <= 1000) &&
+    b[0] < b[2] &&
+    b[1] < b[3]
+      ? (b as [number, number, number, number])
+      : null;
+  return {
+    category,
+    severity,
+    description: String(p.description || 'Observed defect requiring rectification.'),
+    location_note: String(p.location_note || roomContext),
+    box_2d: box,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -309,30 +337,7 @@ Rules:
       image: { data: imageBuffer.toString('base64'), mimeType: mimeType || 'image/jpeg' },
       schema: snagSchema,
     });
-    const parsed = parseJson<Partial<SnagAnalysisResult>>(raw);
-    const category = VALID_CATEGORIES.includes(parsed.category as SnagCategory)
-      ? (parsed.category as SnagCategory)
-      : 'other';
-    const severity = VALID_SEVERITIES.includes(parsed.severity as SnagSeverity)
-      ? (parsed.severity as SnagSeverity)
-      : 'minor';
-    const box =
-      Array.isArray(parsed.box_2d) &&
-      parsed.box_2d.length === 4 &&
-      parsed.box_2d.every((n) => typeof n === 'number' && n >= 0 && n <= 1000)
-        ? (parsed.box_2d as [number, number, number, number])
-        : null;
-
-    return {
-      source: 'gemini',
-      data: {
-        category,
-        severity,
-        description: String(parsed.description || 'Observed defect requiring rectification.'),
-        location_note: String(parsed.location_note || roomContext),
-        box_2d: box,
-      },
-    };
+    return { source: 'gemini', data: normalizeSnagAnalysis(parseJson<unknown>(raw), roomContext) };
   } catch {
     return {
       source: 'fallback',
@@ -378,9 +383,24 @@ function formatDate(value: string | Date): string {
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
 }
 
+/**
+ * Statutory reference added to every letter. RERA Section 14(3) makes the promoter rectify defects in workmanship,
+ * quality or services reported within five years of possession, at no charge. It is a fixed legal fact, not an
+ * inference about the flat, so it does not break the "never invent facts" guardrail.
+ */
+export const RERA_CLAUSE =
+  'This notice is without prejudice to my rights under Section 14(3) of the Real Estate (Regulation and Development) Act, 2016, under which the promoter must rectify defects in workmanship, quality or services at no additional cost.';
+
+const LANGUAGE_RULE: Record<LetterLanguage, string> = {
+  en: 'Write the letter in English (Indian formal register).',
+  hi: 'Write the entire letter in formal Hindi (Devanagari script). Keep names, the project, tower and flat number exactly as given, and keep every "**[Photo #N]**" tag unchanged.',
+  mr: 'Write the entire letter in formal Marathi (Devanagari script). Keep names, the project, tower and flat number exactly as given, and keep every "**[Photo #N]**" tag unchanged.',
+};
+
 export async function generateSnagLetter(
   walk: LetterWalk,
-  snagsByRoom: LetterRoomGroup[]
+  snagsByRoom: LetterRoomGroup[],
+  language: LetterLanguage = 'en'
 ): Promise<AiResult<string>> {
   const today = formatDate(new Date());
   const rooms = snagsByRoom.filter((r) => r.snags.length > 0);
@@ -408,7 +428,10 @@ Rules (mandatory):
    Do not invent any other facts either: no addresses, cities, agreement numbers or dates beyond those given above.
 5. Structure: date and addresses, a bold subject line, short opening paragraph, the room-by-room list,
    the 15-day request, closing, and a signature block with the buyer's name.
-6. Output clean Markdown only. No code fences, no preamble, no notes to the user. Do not use em dashes.`;
+6. Right after the 15-day request, include this statutory sentence (translated faithfully if the letter is not in English):
+   "${RERA_CLAUSE}"
+7. ${LANGUAGE_RULE[language]}
+8. Output clean Markdown only. No code fences, no preamble, no notes to the user. Do not use em dashes.`;
 
   try {
     const letter = await generate({ prompt, temperature: 0.3 });
@@ -418,7 +441,8 @@ Rules (mandatory):
   }
 }
 
-function templateLetter(walk: LetterWalk, rooms: LetterRoomGroup[], today: string): string {
+/** Deterministic English letter used when Gemini is unavailable. Lists only the recorded snags. */
+export function templateLetter(walk: LetterWalk, rooms: LetterRoomGroup[], today: string): string {
   const list =
     rooms.length === 0
       ? '_No defects were recorded during this inspection._'
@@ -451,6 +475,8 @@ I inspected Flat ${walk.flat_number}, ${walk.tower} at ${walk.project} on ${form
 ${list}
 
 I request that all the above items be rectified within **15 days** of receipt of this letter. Please confirm completion in writing and propose a date for a joint re-inspection before final handover and registration.
+
+${RERA_CLAUSE}
 
 Thank you for your cooperation.
 

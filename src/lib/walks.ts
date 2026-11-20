@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { query } from '@/lib/db';
 import type { AiSource, LetterRoomGroup, LetterWalk } from '@/lib/gemini';
+import type { LetterLanguage } from '@/lib/shared';
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -133,7 +134,8 @@ export async function getNumberedSnags(walkId: string) {
 // snags it was generated from, so the UI can tell when the letter is stale (snag added/edited/deleted).
 // ---------------------------------------------------------------------------
 
-const MARKER_RE = /\n*<!--\s*snagwalk:fp=([a-f0-9]+);src=(gemini|fallback)\s*-->\s*$/;
+// lang is optional so letters saved before multi-language support still parse (they are English).
+const MARKER_RE = /\n*<!--\s*snagwalk:fp=([a-f0-9]+);src=(gemini|fallback)(?:;lang=(en|hi|mr))?\s*-->\s*$/;
 
 export function letterFingerprint(walk: PublicWalk, groups: LetterRoomGroup[]): string {
   return crypto
@@ -143,13 +145,25 @@ export function letterFingerprint(walk: PublicWalk, groups: LetterRoomGroup[]): 
     .slice(0, 16);
 }
 
-export function packLetter(markdown: string, fp: string, source: AiSource): string {
-  return `${markdown.trim()}\n\n<!-- snagwalk:fp=${fp};src=${source} -->`;
+export function packLetter(markdown: string, fp: string, source: AiSource, language: LetterLanguage = 'en'): string {
+  return `${markdown.trim()}\n\n<!-- snagwalk:fp=${fp};src=${source};lang=${language} -->`;
 }
 
-export function unpackLetter(text: string | null): { markdown: string; fp: string | null; source: AiSource | null } | null {
+export interface SavedLetter {
+  markdown: string;
+  fp: string | null;
+  source: AiSource | null;
+  language: LetterLanguage;
+}
+
+export function unpackLetter(text: string | null): SavedLetter | null {
   if (!text) return null;
   const m = text.match(MARKER_RE);
-  if (!m) return { markdown: text.trim(), fp: null, source: null };
-  return { markdown: text.replace(MARKER_RE, '').trim(), fp: m[1], source: m[2] as AiSource };
+  if (!m) return { markdown: text.trim(), fp: null, source: null, language: 'en' };
+  return {
+    markdown: text.replace(MARKER_RE, '').trim(),
+    fp: m[1],
+    source: m[2] as AiSource,
+    language: (m[3] as LetterLanguage | undefined) ?? 'en',
+  };
 }

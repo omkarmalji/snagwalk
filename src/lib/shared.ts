@@ -17,6 +17,18 @@ export type Severity = (typeof SEVERITIES)[number];
 
 export const BHK_OPTIONS = [1, 2, 3, 4, 5] as const;
 
+/** Languages the builder letter can be written in. Labels are shown in their own script. */
+export const LETTER_LANGUAGES = [
+  { value: 'en', label: 'English' },
+  { value: 'hi', label: 'हिन्दी' },
+  { value: 'mr', label: 'मराठी' },
+] as const;
+export type LetterLanguage = (typeof LETTER_LANGUAGES)[number]['value'];
+
+export function parseLetterLanguage(value: unknown): LetterLanguage {
+  return LETTER_LANGUAGES.some((l) => l.value === value) ? (value as LetterLanguage) : 'en';
+}
+
 export function categoryLabel(value: string): string {
   return CATEGORIES.find((c) => c.value === value)?.label ?? value.replace(/_/g, ' ');
 }

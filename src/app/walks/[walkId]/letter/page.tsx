@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import ReactMarkdown, { type Components } from 'react-markdown';
+import { computePageBreaks } from '@/lib/pdf-breaks';
 import remarkGfm from 'remark-gfm';
 import {
   ArrowClockwise,
@@ -15,9 +16,9 @@ import {
 } from '@phosphor-icons/react';
 import AppHeader from '@/components/AppHeader';
 import { Button, Card, SeverityBadge, Skeleton, SourceTag, cn } from '@/components/ui';
-import { api, formatDate, toWhatsAppText } from '@/lib/client';
+import { api, formatDate, jsonInit, toWhatsAppText } from '@/lib/client';
 import { gsap, useGSAP, useReveal, prefersReducedMotion, EASE } from '@/lib/motion';
-import { categoryLabel, photoSrc } from '@/lib/shared';
+import { LETTER_LANGUAGES, categoryLabel, photoSrc, type LetterLanguage } from '@/lib/shared';
 
 interface Snag {
   id: string;
@@ -44,6 +45,7 @@ interface LetterResponse {
   snags: Snag[];
   letter: string | null;
   source: 'gemini' | 'fallback' | null;
+  language: LetterLanguage;
   stale: boolean;
 }
 
@@ -91,12 +93,17 @@ export default function LetterPage() {
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [language, setLanguage] = useState<LetterLanguage>('en');
+  const languageRef = useRef<LetterLanguage>('en');
 
-  const generate = useCallback(async () => {
+  const generate = useCallback(async (lang?: LetterLanguage) => {
+    const target = lang ?? languageRef.current;
+    languageRef.current = target;
+    setLanguage(target);
     setGenerating(true);
     setError(null);
     try {
-      setData(await api<LetterResponse>(`/api/walks/${walkId}/letter`, { method: 'POST' }));
+      setData(await api<LetterResponse>(`/api/walks/${walkId}/letter`, jsonInit('POST', { language: target })));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -110,7 +117,9 @@ export default function LetterPage() {
     api<LetterResponse>(`/api/walks/${walkId}/letter`)
       .then((d) => {
         setData(d);
-        if (!d.letter || d.stale) generate();
+        languageRef.current = d.language;
+        setLanguage(d.language);
+        if (!d.letter || d.stale) generate(d.language);
       })
       .catch((e) => setError((e as Error).message));
   }, [walkId, generate]);
@@ -196,17 +205,7 @@ export default function LetterPage() {
 
       // Break each page at the last block boundary that fits, so text lines and photos are never cut in half.
       const totalH = canvas.height / (canvas.width / A4_W);
-      const breaks: Array<[number, number]> = [];
-      for (let y = 0; y < totalH - 1; ) {
-        let end = Math.min(y + usable, totalH);
-        if (end < totalH) {
-          const straddling = blocks.filter(([top, bottom]) => top > y + 1 && top < end && bottom > end).map(([top]) => top);
-          const cut = straddling.length ? Math.min(...straddling) - 6 : end;
-          if (cut > y + usable * 0.25) end = cut; // a single block taller than a page is still cut
-        }
-        breaks.push([y, end]);
-        y = end;
-      }
+      const breaks = computePageBreaks(blocks, totalH, usable);
 
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pageW = pdf.internal.pageSize.getWidth();
@@ -256,12 +255,34 @@ export default function LetterPage() {
                 <Count label="Minor" value={counts.minor} tone="text-ink-2" />
               </Card>
 
+              <fieldset data-reveal className="mt-4 min-w-0">
+                <legend className="label">Letter language</legend>
+                <div className="grid grid-cols-3 gap-1 rounded-full border border-line bg-surface-2 p-1">
+                  {LETTER_LANGUAGES.map((l) => (
+                    <button
+                      key={l.value}
+                      type="button"
+                      lang={l.value}
+                      aria-pressed={language === l.value}
+                      disabled={generating}
+                      onClick={() => l.value !== language && generate(l.value)}
+                      className={cn(
+                        'h-10 rounded-full text-[14px] font-medium transition-colors duration-200 disabled:cursor-wait',
+                        language === l.value ? 'bg-surface text-ink shadow-lift' : 'text-ink-2 hover:text-ink'
+                      )}
+                    >
+                      {l.label}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+
               <div data-reveal className="mt-4 hidden flex-col gap-2 lg:flex">
                 <Button size="lg" onClick={downloadPdf} loading={downloading} disabled={!ready} className="w-full">
                   {!downloading && <DownloadSimple className="size-5" weight="bold" />}
                   Download PDF
                 </Button>
-                <SecondaryActions ready={ready} copied={copied} generating={generating} onShare={share} onCopy={copy} onRegenerate={generate} />
+                <SecondaryActions ready={ready} copied={copied} generating={generating} onShare={share} onCopy={copy} onRegenerate={() => generate()} />
               </div>
 
               <div data-reveal className="mt-4 flex items-center gap-2 text-[13px] text-ink-2">
@@ -272,7 +293,11 @@ export default function LetterPage() {
                     <>
                       <SourceTag source={data.source} />
                       <span>
-                        {data.source === 'gemini' ? 'Written from your recorded snags only' : 'Gemini unavailable, standard template used'}
+                        {data.source === 'gemini'
+                          ? 'Written from your recorded snags only'
+                          : language === 'en'
+                            ? 'Gemini unavailable, standard template used'
+                            : 'Gemini unavailable, standard English template used'}
                       </span>
                     </>
                   )
@@ -280,7 +305,7 @@ export default function LetterPage() {
               </div>
 
               <div className="mt-4 lg:hidden">
-                <SecondaryActions ready={ready} copied={copied} generating={generating} onShare={share} onCopy={copy} onRegenerate={generate} />
+                <SecondaryActions ready={ready} copied={copied} generating={generating} onShare={share} onCopy={copy} onRegenerate={() => generate()} />
               </div>
             </div>
           </aside>
@@ -291,7 +316,7 @@ export default function LetterPage() {
                 <WarningCircle className="mt-0.5 size-5 shrink-0" weight="fill" />
                 <div className="flex-1 text-[14px]">
                   <p className="font-medium">{error}</p>
-                  <button type="button" onClick={generate} className="mt-1 font-semibold underline underline-offset-2">
+                  <button type="button" onClick={() => generate()} className="mt-1 font-semibold underline underline-offset-2">
                     Try again
                   </button>
                 </div>
@@ -301,6 +326,7 @@ export default function LetterPage() {
             <article
               ref={paperRef}
               data-reveal
+              lang={language === 'en' ? 'en-IN' : language}
               className="paper rounded-[6px] px-6 py-8 shadow-paper ring-1 ring-black/5 sm:px-12 sm:py-12"
             >
               {!ready ? (

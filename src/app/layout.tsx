@@ -1,9 +1,16 @@
 import type { Metadata, Viewport } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { Geist, Geist_Mono, Noto_Sans_Devanagari } from 'next/font/google';
 import './globals.css';
 
 const geist = Geist({ subsets: ['latin'], variable: '--font-geist', display: 'swap' });
 const geistMono = Geist_Mono({ subsets: ['latin'], variable: '--font-geist-mono', display: 'swap' });
+// Hindi and Marathi letters: Geist has no Devanagari glyphs, so the browser falls through to this face.
+const devanagari = Noto_Sans_Devanagari({
+  subsets: ['devanagari'],
+  weight: ['400', '600'],
+  variable: '--font-devanagari',
+  display: 'swap',
+});
 
 export const metadata: Metadata = {
   title: 'SnagWalk - Possession day snag inspection',
@@ -23,7 +30,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en-IN" className={`${geist.variable} ${geistMono.variable}`}>
+    <html lang="en-IN" className={`${geist.variable} ${geistMono.variable} ${devanagari.variable}`}>
       <body className="min-h-[100dvh] overflow-x-hidden">{children}</body>
     </html>
   );

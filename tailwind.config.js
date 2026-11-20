@@ -23,7 +23,7 @@ module.exports = {
         ok: token('ok'),
       },
       fontFamily: {
-        sans: ['var(--font-geist)', 'system-ui', 'sans-serif'],
+        sans: ['var(--font-geist)', 'var(--font-devanagari)', 'system-ui', 'sans-serif'],
         mono: ['var(--font-geist-mono)', 'ui-monospace', 'monospace'],
       },
       borderRadius: {

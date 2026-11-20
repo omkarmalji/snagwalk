@@ -47,3 +47,6 @@ next-env.d.ts
 firebase-debug.log
 .firebase/
 live/node_modules/
+
+# Local notes
+CLAUDE.md

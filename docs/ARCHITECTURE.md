@@ -119,6 +119,6 @@ single-document deletes only.
 
 | Layer | What | Command |
 | --- | --- | --- |
-| Unit (Vitest, 142 tests) | inspection-practice checklists, design-token WCAG AA contrast (both themes), page breaks, Gemini output normalisation, fallback letter invariants, letter fingerprint and marker, data layer contract, photo numbering, room provisioning, formatting | `pnpm test` |
+| Unit (Vitest, 144 tests) | inspection-practice checklists, design-token WCAG AA contrast (both themes), page breaks, Gemini output normalisation, fallback letter invariants, letter fingerprint and marker, data layer contract, photo numbering, room provisioning, formatting | `pnpm test` |
 | End to end (19 checks) | walk, rooms, checklist, photo analysis, photo proxy, edit validation, letter, stale detection, delete, against a running server with real Gemini, Firestore and Cloud Storage | `pnpm smoke <url> <photo.jpg>` |
 | CI | typecheck, lint, unit tests, build on every push | `.github/workflows/ci.yml` |

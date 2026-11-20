@@ -429,7 +429,8 @@ ${JSON.stringify(rooms, null, 2)}
 Rules (mandatory):
 1. Formal, polite and firm tone, addressed to ${walk.builder}.
 2. Group defects by room using a "### Room name" heading per room. Under each, one bullet per defect:
-   "**[Photo #N]** Severity: MAJOR. Description. Location: ..."
+   "**[Photo #N]** Severity: <that defect's recorded severity in capitals>. Description. Location: ..."
+   Use each defect's severity exactly as recorded; never raise or lower it.
 3. Request rectification of all items within 15 days of receipt, and written confirmation of completion
    and a joint re-inspection before final handover and registration.
 4. Never invent, merge, or omit defects. Every photo number above appears exactly once. Do not add rooms that have no defects.
@@ -443,10 +444,27 @@ Rules (mandatory):
 
   try {
     const letter = await generate({ prompt, temperature: 0.3 });
-    return { source: 'gemini', data: letter.replace(/^```(markdown)?/i, '').replace(/```$/, '').trim() };
+    const clean = letter.replace(/^```(markdown)?/i, '').replace(/```$/, '').trim();
+    return { source: 'gemini', data: enforceRecordedSeverity(clean, rooms) };
   } catch {
     return { source: 'fallback', data: templateLetter(walk, rooms, today) };
   }
+}
+
+/**
+ * The letter must state each defect's severity exactly as recorded. Gemini occasionally restates it (for example
+ * "MAJOR" for a critical snag), so English severity labels after each photo tag are rewritten from the data.
+ */
+export function enforceRecordedSeverity(letter: string, rooms: LetterRoomGroup[]): string {
+  const bySnag = new Map<number, string>();
+  for (const room of rooms) for (const s of room.snags) bySnag.set(s.photo_number, s.severity.toUpperCase());
+  return letter.replace(
+    /(\*\*\[Photo #(\d+)\]\*\*[^\n]*?Severity:\s*)(minor|major|critical)\b/gi,
+    (match, prefix: string, num: string) => {
+      const recorded = bySnag.get(Number(num));
+      return recorded ? `${prefix}${recorded}` : match;
+    }
+  );
 }
 
 /** Deterministic English letter used when Gemini is unavailable. Lists only the recorded snags. */

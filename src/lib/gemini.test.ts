@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RERA_CLAUSE, isRetryableAiError, normalizeSnagAnalysis, parseJson, templateLetter, type LetterRoomGroup, type LetterWalk } from './gemini';
+import { RERA_CLAUSE, enforceRecordedSeverity, isRetryableAiError, normalizeSnagAnalysis, parseJson, templateLetter, type LetterRoomGroup, type LetterWalk } from './gemini';
 
 describe('parseJson', () => {
   it('strips markdown code fences around JSON', () => {
@@ -118,5 +118,33 @@ describe('isRetryableAiError', () => {
     expect(isRetryableAiError({ status: 400, message: 'Invalid argument' })).toBe(false);
     expect(isRetryableAiError(new Error('Permission denied on resource'))).toBe(false);
     expect(isRetryableAiError(new Error('model gemini-x-1429 not found'))).toBe(false);
+  });
+});
+
+describe('enforceRecordedSeverity', () => {
+  const rooms: LetterRoomGroup[] = [
+    {
+      room_name: 'Entrance & Passage',
+      snags: [{ photo_number: 1, category: 'wall_paint', severity: 'critical', description: 'Mould', location_note: null }],
+    },
+    {
+      room_name: 'Kitchen',
+      snags: [{ photo_number: 2, category: 'tiles', severity: 'minor', description: 'Grout', location_note: null }],
+    },
+  ];
+
+  it('rewrites a restated severity to the recorded one', () => {
+    const out = enforceRecordedSeverity(
+      '- **[Photo #1]** Severity: MAJOR. Mould.\n- **[Photo #2]** Severity: Critical. Grout.',
+      rooms
+    );
+    expect(out).toContain('**[Photo #1]** Severity: CRITICAL.');
+    expect(out).toContain('**[Photo #2]** Severity: MINOR.');
+  });
+
+  it('leaves unknown photo numbers and translated letters untouched', () => {
+    const hindi = '- **[Photo #1]** गंभीरता: गंभीर।';
+    expect(enforceRecordedSeverity(hindi, rooms)).toBe(hindi);
+    expect(enforceRecordedSeverity('**[Photo #9]** Severity: MAJOR.', rooms)).toBe('**[Photo #9]** Severity: MAJOR.');
   });
 });
